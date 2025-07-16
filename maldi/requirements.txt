@@ -1,0 +1,11 @@
+# Core dependencies
+numpy
+torch
+gpytorch
+tqdm
+wandb
+
+# Experiment-specific dependencies
+scikit-learn
+pandas
+pyarrow
