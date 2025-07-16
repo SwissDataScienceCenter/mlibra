@@ -1,52 +1,97 @@
-########################################################
-#        Renku install section - do not edit           #
+ARG BASE_IMAGE=jupyter/base-notebook:python-3.10
 
-#FROM renku/renkulab-py:3.10-0.24.0 as builder
-FROM RENKU_BASE_IMAGE=renku/renkulab-vnc:3.11 as builder
-# RENKU_VERSION determines the version of the renku CLI
-# that will be used in this image. To find the latest version,
-# visit https://pypi.org/project/renku/#history.
-ARG RENKU_VERSION=2.9.2
+FROM ${BASE_IMAGE} as builder
 
-# Install renku from pypi or from github if a dev version
-RUN if [ -n "$RENKU_VERSION" ] ; then \
-        source .renku/venv/bin/activate ; \
-        currentversion=$(renku --version) ; \
-        if [ "$RENKU_VERSION" != "$currentversion" ] ; then \
-            pip uninstall renku -y ; \
-            gitversion=$(echo "$RENKU_VERSION" | sed -n "s/^[[:digit:]]\+\.[[:digit:]]\+\.[[:digit:]]\+\(rc[[:digit:]]\+\)*\(\.dev[[:digit:]]\+\)*\(+g\([a-f0-9]\+\)\)*\(+dirty\)*$/\4/p") ; \
-            if [ -n "$gitversion" ] ; then \
-                pip install --no-cache-dir --force "git+https://github.com/SwissDataScienceCenter/renku-python.git@$gitversion" ;\
-            else \
-                pip install --no-cache-dir --force renku==${RENKU_VERSION} ;\
-            fi \
-        fi \
-    fi
-#             End Renku install section                #
-########################################################
+USER root
+RUN apt-get update && apt-get install -yq --no-install-recommends \
+    build-essential git && \
+    apt-get clean && \
+    rm -rf /var/lib/apt/lists/*
 
-FROM renku/renkulab-vnc:3.11
+# remove the nodejs pin if needed - see https://github.com/jupyter/docker-stacks/issues/1990
+RUN sed -i '/nodejs/d' /opt/conda/conda-meta/pinned
 
-# Uncomment and adapt if code is to be included in the image
-# COPY src /code/src
+# switch to the notebook user
+USER $NB_USER
+# install jupyterlab, papermill, git extension and renku-jupyterlab-ts
+COPY requirements.txt /tmp/requirements.txt
+RUN python3 -m pip install --no-cache-dir -U pip && \
+    python3 -m pip install --no-cache-dir -r /tmp/requirements.txt && \
+    jupyter labextension disable "@jupyterlab/apputils-extension:announcements" && \
+    rm -rf "/home/${NB_USER}/.cache"
 
-# Uncomment and adapt if your R or python packages require extra linux (ubuntu) software
-# e.g. the following installs apt-utils and vim; each pkg on its own line, all lines
-# except for the last end with backslash '\' to continue the RUN line
-#
-# USER root
-# RUN apt-get update && \
-#    apt-get install -y --no-install-recommends \
-#    apt-utils \
-#    vim
-# USER ${NB_USER}
+# jupyter sets channel priority to strict which often causes very long error messages
+RUN conda config --system --set channel_priority flexible && \
+    conda clean --all -f -y
 
-# install the python dependencies
-COPY requirements.txt environment.yml /tmp/
-RUN mamba env update -q -f /tmp/environment.yml && \
-    /opt/conda/bin/pip install -r /tmp/requirements.txt --no-cache-dir && \
-    mamba clean -y --all && \
-    mamba env export -n "root" && \
-    rm -rf ${HOME}/.renku/venv
 
-COPY --from=builder ${HOME}/.renku/venv ${HOME}/.renku/venv
+
+FROM $BASE_IMAGE
+
+LABEL maintainer="Swiss Data Science Center <info@datascience.ch>"
+
+USER root
+SHELL [ "/bin/bash", "-c", "-o", "pipefail" ]
+
+# Install additional dependencies and nice-to-have packages
+RUN apt-get update && apt-get install -yq --no-install-recommends \
+    build-essential \
+    curl \
+    git \
+    gnupg \
+    graphviz \
+    jq \
+    less \
+    libsm6 \
+    libxext-dev \
+    libxrender1 \
+    libyaml-0-2 \
+    libyaml-dev \
+    lmodern \
+    musl-dev \
+    nano \
+    netcat \
+    rclone \
+    unzip \
+    vim \
+    git \
+    emacs \
+    openssh-server && \
+    apt-get clean && \
+    rm -rf /var/lib/apt/lists/* && \
+    ln -s /usr/lib/x86_64-linux-musl/libc.so /lib/libc.musl-x86_64.so.1 && \
+    rm -rf /tmp/git-lfs*
+
+USER $NB_USER
+
+# setup sshd
+RUN mkdir -p "$HOME/.ssh" && \
+    touch "$HOME/.ssh/authorized_keys" && \
+    chmod u=rw,g=,o= "$HOME/.ssh/authorized_keys"
+
+# configure bash and shell prompt
+ENV PATH=$HOME/.local/bin:$PATH
+
+
+# Setup ssh keys
+USER root
+RUN mkdir -p /opt/ssh/sshd_config.d /opt/ssh/ssh_host_keys /opt/ssh/pid && \
+    ssh-keygen -q -N "" -t dsa -f /opt/ssh/ssh_host_keys/ssh_host_dsa_key && \
+    ssh-keygen -q -N "" -t rsa -b 4096 -f /opt/ssh/ssh_host_keys/ssh_host_rsa_key && \
+    ssh-keygen -q -N "" -t ecdsa -f /opt/ssh/ssh_host_keys/ssh_host_ecdsa_key && \
+    ssh-keygen -q -N "" -t ed25519 -f /opt/ssh/ssh_host_keys/ssh_host_ed25519_key
+
+COPY sshd_config /opt/ssh/sshd_config
+
+RUN chown -R 0:100 /opt/ssh/ && \
+    chmod -R u=rwX,g=rX,o= /opt/ssh && \
+    chmod -R u=rwX,g=rwX,o= /opt/ssh/pid
+
+
+CMD [ "jupyter", "server", "--ip", "0.0.0.0" ]
+
+USER $NB_USER
+COPY --chown=1000:100 --from=builder /opt/conda /opt/conda
+
+ARG CONDA_ENVS_DIRS
+ENV CONDA_ENVS_DIRS=${CONDA_ENVS_DIRS:-/opt/conda/envs}

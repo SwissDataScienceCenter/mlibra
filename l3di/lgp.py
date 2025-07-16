@@ -197,7 +197,6 @@ class LGP(nn.Module):
     def train_model(self, exp_path, dataloader, optimizer, epochs, current_epoch, print_every=1000):
         self.to(self.device)
         self.train()
-        wandb.log({"minimal_length_scale": self.gp_model.minimal_length_scale})
 
         for epoch in range(current_epoch, epochs):
             mean_loss = 0
@@ -205,7 +204,7 @@ class LGP(nn.Module):
             kl_loss = 0
             mse_loss = 0
             for i, data in enumerate(tqdm(dataloader)):
-                x, dummies, coord, sections, pixel_coord = data
+                x,  coord = data
                 x = x.to(self.device)
                 coord = coord.to(self.device)
                 optimizer.zero_grad()
