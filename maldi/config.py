@@ -36,6 +36,8 @@ class MaldiConfig:
     section_filter: List[Tuple[int, int]]
     test_filter: List[Tuple[int, int]]
     selected_lipids_names: List[str]
+    available_lipids: List[str]
+    selected_channels: List[int]
 
     @staticmethod
     def from_args(args):
@@ -119,7 +121,9 @@ class MaldiConfig:
                            n_pixels=n_pixels,
                            learning_rate=learning_rate,
                            section_filter=section_filter,
-                           test_filter=test_filter)
+                           test_filter=test_filter,
+                           selected_channels=selected_channels,
+                           available_lipids=available_lipids)
 
     def to_dict(self):
         """

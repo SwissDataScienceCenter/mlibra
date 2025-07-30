@@ -35,12 +35,7 @@ def parse_args():
     # Add other arguments as needed
     return vars(parser.parse_args())
 
-if __name__ == "__main__":
-    logging.basicConfig(level=logging.INFO)
-    logging.info("Starting MALDI experiment")
-    args = parse_args()
-    logging.info(f"Parsed arguments: {args}")
-    # Create configuration from parsed arguments
+def setup_experiment(args):
     config = MaldiConfig.from_args(args)
     logging.info("Configuration created successfully")
     logging.info("Getting inducing points")
@@ -75,4 +70,13 @@ if __name__ == "__main__":
         device=config.device
     )
     experiment = MaldiExperiment(config,lgp_model,coord_mean, coord_std)
+    return experiment
+
+
+if __name__ == "__main__":
+    logging.basicConfig(level=logging.INFO)
+    logging.info("Starting MALDI experiment")
+    args = parse_args()
+    logging.info(f"Parsed arguments: {args}")
+    setup_experiment(args)
     experiment.run()

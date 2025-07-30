@@ -216,7 +216,7 @@ class LGP(nn.Module):
                 mean_loss += loss.item()
                 reconstr_loss += recon_loss.item()
                 kl_loss += kl_div.item()
-                mse_loss_batch = F.mse_loss(x_reconstructed.detach(), x).item()
+                mse_loss_batch = F.mse_loss(x_reconstructed.detach(), x.detach()).item()
                 mse_loss += mse_loss_batch
                 if i % 10 == 0:
                     wandb.log({"loss_batch": loss.item()})

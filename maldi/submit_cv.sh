@@ -12,7 +12,7 @@ for batch_size in  $BATCH_SIZES; do
     for INDUCING in $INDUCINGS; do
       for LATENT_DIM in $LATENT_DIMS; do
         for FOLD in $FOLDS; do
-          JOB_NAME="gp-encoder-cv-${FOLD}-${INDUCING}-${LATENT_DIM}-${batch_size}"
+          JOB_NAME="gp-postpred-cv-${FOLD}-${INDUCING}-${LATENT_DIM}-${batch_size}"
           runai delete job "$JOB_NAME" -p mlibra-daniel || true
           runai submit --name "$JOB_NAME" \
             --preemptible \
@@ -21,8 +21,6 @@ for batch_size in  $BATCH_SIZES; do
             -i registry.renkulab.io/daniel.trejobanos1/mlibra \
             --memory-limit "$MEM" \
             --memory "$MEM" \
-            --gpu "$GPU" \
-            --node-type A100 \
             -p mlibra-daniel \
             --command -- \
             bash /myhome/mlibra/maldi/run_all.sh "$INDUCING" "$LATENT_DIM" "$FOLD" "$batch_size"

@@ -8,8 +8,75 @@ import pandas as pd
 import torch
 from tqdm import tqdm
 from pathlib import Path
+import matplotlib.pyplot as plt
 import wandb
 
+def density_scatter(ax, x, y, x_min, x_max, y_min, y_max, bins=50, **kwargs):
+    """
+    Creates a scatter plot on the provided axis using a density-based color
+    from a 2D histogram with square bins.
+    """
+    # Calculate limits and ensure square bins
+    # valid_mask = ~np.isnan(y) & ~np.isneginf(y)
+    # y = y[valid_mask]
+    # x = x[valid_mask]
+    # x_min, x_max = np.nanmin(x), np.nanmax(x)
+    # y_min, y_max = np.nanmin(y), np.nanmax(y)
+    data_range = max(x_max - x_min, y_max - y_min)
+    x_center, y_center = (x_min + x_max) / 2, (y_min + y_max) / 2
+    half_range = data_range / 2
+    # x_lim = (x_center - half_range, x_center + half_range)
+    # y_lim = (y_center - half_range, y_center + half_range)
+    x_lim = (x_min, x_max)
+    y_lim = (y_min, y_max)
+
+    # Create bin edges
+    xedges = np.linspace(x_lim[0], x_lim[1], bins + 1)
+    yedges = np.linspace(y_lim[0], y_lim[1], bins + 1)
+
+    # Determine the bin index for each point
+    x_bin = np.digitize(x, xedges) - 1
+    y_bin = np.digitize(y, yedges) - 1
+
+    # Build a 2D histogram for the points
+    counts = np.zeros((bins, bins))
+    for xb, yb in zip(x_bin, y_bin):
+        if xb == bins:
+            xb = bins - 1
+        if yb == bins:
+            yb = bins - 1
+        if 0 <= xb < bins and 0 <= yb < bins:
+            counts[yb, xb] += 1
+
+    # Get density for each point from its bin
+    density = np.array(
+        [
+            counts[yb if yb < bins else bins - 1, xb if xb < bins else bins - 1]
+            for xb, yb in zip(x_bin, y_bin)
+        ]
+    )
+
+    # Create the scatter plot with density coloring using the inferno colormap
+    sc = ax.scatter(x, y, c=density, cmap="inferno", **kwargs)
+    ax.set_xlim(x_lim)
+    ax.set_ylim(y_lim)
+    return sc
+
+def scatter_comparison(true_values, predicted_values, lipid ):
+    fig, ax = plt.subplots(figsize=(10, 10))
+    true_min = np.nanmin(true_values)
+    true_max = np.nanmax(true_values)
+    predicted_min = np.nanmin(predicted_values)
+    predicted_max = np.nanmax(predicted_values)
+    ax.plot([true_min, true_max],[true_min, true_max], "k--", lw=2)
+    density_scatter(ax, true_value, predicted_value,
+                    x_min=true_min, x_max=true_max,
+                    y_min=predicted_min, y_max=predicted_max,
+                    s=0.1, alpha=0.1)
+    ax.set_title(f"Train set: {lipid} vs {lipid}_predicted\nCorrelation: {correlation:.2f}")
+    ax.set_xlabel(f"{lipid} (true)")
+    ax.set_ylabel(f"{lipid} (predicted)")
+    plt.show()
 
 class MaldiExperiment:
     def __init__(self, config, lgp_model, coord_mean, coord_std):
@@ -23,6 +90,39 @@ class MaldiExperiment:
 
         self.coordinates_train = None
         self.coordinates_test = None
+        self.train_data_original = None
+        self.test_data_original = None
+        self.train_data = None
+        self.test_data = None
+        self.pixel_coordinates_train = None
+        self.pixel_coordinates_test = None
+        self.col_means = None
+        self.col_stds = None
+
+    def load_train_sections(self):
+        self.train_sections = pd.read_parquet(self.config.maldi_file,
+                                                  columns=["Section"],
+                                                  filters=self.train_filter)
+
+    def load_train_coordinates(self):
+        logging.info("Loading training coordinates")
+        coordinates_names = ["xccf", "yccf", "zccf"]
+        self.coordinates_train = pd.read_parquet(self.config.maldi_file,
+                                                    columns=coordinates_names,
+                                                    filters=self.train_filter).values
+
+    def load_train_pixel_coordinates(self):
+        logging.info("Loading training pixel coordinates")
+        coordinates_names = ["x", "y"]
+        self.pixel_coordinates_train = pd.read_parquet(self.config.maldi_file,
+                                                    columns=coordinates_names,
+                                                    filters=self.train_filter).values
+
+    def load_train_samples(self):
+        logging.info("Loading training samples")
+        self.train_samples = pd.read_parquet(self.config.maldi_file,
+                                             columns=["Sample"],
+                                             filters=self.train_filter)
 
     def load_train_data(self):
         self.train_data = pd.read_parquet(self.config.maldi_file,
@@ -84,6 +184,43 @@ class MaldiExperiment:
 
         self.dataset_train = torch.utils.data.TensorDataset(self.train_data, self.coordinates_train)
 
+    def load_test_data(self):
+        self.test_data = pd.read_parquet(self.config.maldi_file,
+                                         columns=[str(i) for i in self.config.selected_lipids_names],
+                                         filters=self.test_filter).values
+        self.test_data = torch.tensor(self.test_data, dtype=torch.float32)
+        assert self.test_data.shape[0] > 0, "No test data found with the given filter"
+        n_nans = torch.isnan(self.test_data).sum()
+        assert not torch.isnan(self.test_data).any(), f"Test data contains NaNs: {n_nans} NaNs found"
+        n_zeros = (self.test_data == 0).sum()
+        logging.info(f"Test data contains {n_zeros} zeros")
+        n_negatives = (self.test_data < 0).sum()
+        logging.info(f"Test data contains {n_negatives} negative values")
+        logging.info("imputing negative values to zero")
+        self.test_data[self.test_data < 0] = 0
+
+        log_transform = self.config.log_transform
+        if log_transform:
+            logging.info("Applying log transformation to test data")
+            self.test_data = np.log(self.test_data + 1e-10)
+            n_nans = torch.isnan(self.test_data).sum()
+            assert not torch.isnan(self.test_data).any(), f"Test data contains NaNs after log transformation: {n_nans} NaNs found after log transformation"
+        else:
+            logging.info("Skipping log transformation")
+        logging.info(f"Test data shape: {self.test_data.shape}")
+
+        logging.info("normalizing test data")
+        if (self.config.exp_path / "lipid_means.pth").exists() and (self.config.exp_path / "lipid_std.pth").exists():
+            logging.info("Loading column mean and std from files")
+            col_means = torch.load(self.config.exp_path / "lipid_means.pth")
+            col_stds = torch.load(self.config.exp_path / "lipid_std.pth")
+        else:
+            logging.info("computing channels means and stds")
+            col_means = self.train_data.mean(dim=0)
+            col_stds = self.train_data.std(dim=0)
+            torch.save(col_means, self.config.exp_path / "lipid_means.pth")
+            torch.save(col_stds, self.config.exp_path / "lipid_stds.pth")
+
     def load_coord_train_data(self):
         if self.coordinates_train is None:
             logging.info("Loading coordinates for training data")
@@ -121,11 +258,10 @@ class MaldiExperiment:
             self.current_epoch = len(list(self.config.checkpoint_path.glob("*.pth")))
             logging.info(f"loaded checkpoint {last_checkpoint}")
 
-
-
-
     def train_fit(self):
             optimizer = torch.optim.Adam(self.lgp_model.parameters(), lr=self.config.learning_rate)
+            # let's use ADAMW instead of ADAM
+            optimizer = torch.optim.AdamW(self.lgp_model.parameters(), lr=self.config.learning_rate, weight_decay=1e-3)
             logging.info("ready to roll")
 
 
@@ -145,7 +281,6 @@ class MaldiExperiment:
                                       epochs=self.config.epochs,
                                       current_epoch=self.current_epoch,
                                       print_every=1000)
-
 
     def run(self):
         """Run the experiment."""
@@ -222,3 +357,597 @@ class MaldiExperiment:
         else:
             logging.info("Test predictions already exist, loading from file")
             test_predictions = torch.load(test_predictions_file)
+        train_prediction_file = train_path / "train_predictions.parquet"
+        test_prediction_file = test_path / "test_predictions.parquet"
+        if True: #not (train_prediction_file.exists() and test_prediction_file.exists()):
+            if self.train_data is None:
+                self.load_train_data()
+            if self.test_data is None:
+                self.load_test_data()
+            # evaluate predictions:
+            logging.info("Evaluating predictions")
+            train_predictions = train_predictions * self.col_stds + self.col_means
+            test_predictions = test_predictions * self.col_stds + self.col_means
+            if self.config.log_transform:
+                train_predictions = np.exp(train_predictions) - 1e-10
+                test_predictions = np.exp(test_predictions) - 1e-10
+            train_data = self.train_data * self.col_stds + self.col_means
+            test_data = self.test_data * self.col_stds + self.col_means
+            if self.config.log_transform:
+                train_data = np.exp(train_data) - 1e-10
+                test_data = np.exp(test_data) - 1e-10
+            # train and test are 2D tensors, save as pandas dataframes, with columns "true" and "predicted"
+            train_df = pd.DataFrame(data=train_data.numpy(),
+                                    columns=self.config.selected_lipids_names)
+            predictions_df = pd.DataFrame(data=train_predictions.numpy(),
+                                        columns=self.config.selected_lipids_names)
+            test_df = pd.DataFrame(data=test_data.numpy(),
+                                      columns=self.config.selected_lipids_names)
+            test_predictions_df = pd.DataFrame(data=test_predictions.numpy(),
+                                               columns=self.config.selected_lipids_names)
+            train_df = pd.concat([train_df, predictions_df.add_suffix("_predicted")], axis=1)
+            test_df = pd.concat([test_df, test_predictions_df.add_suffix("_predicted")], axis=1)
+
+            train_df.to_parquet(train_prediction_file)
+            test_df.to_parquet(test_prediction_file )
+            self.train_data_original = train_data.numpy()
+            self.test_data_original = test_data.numpy()
+            self.predictions_train = train_predictions.numpy()
+            self.predictions_test = test_predictions.numpy()
+            np.save(train_path / "predictions.npy", train_predictions.numpy())
+            np.save(test_path / "predictions.npy", test_predictions.numpy())
+            np.save(train_path / "true_values.npy", train_data.numpy())
+            np.save(test_path / "true_values.npy", test_data.numpy())
+            train_plot_path = train_path / "plots"
+            test_plot_path = test_path / "plots"
+            logging.info(f"Train plot path: {train_plot_path}")
+            train_plot_path.mkdir(parents=True, exist_ok=True)
+            test_plot_path.mkdir(parents=True, exist_ok=True)
+            logging.info("Plotting predictions")
+            import matplotlib.pyplot as plt
+            plot_all = False
+
+            if plot_all:
+                for lipid in tqdm(self.config.selected_lipids_names):
+                    logging.info(f"Plotting {lipid}")
+                    correlation = train_df[lipid].corr(train_df[f"{lipid}_predicted"])
+                    mse = ((train_df[lipid] - train_df[f"{lipid}_predicted"]) ** 2).mean()
+                    mae = (train_df[lipid] - train_df[f"{lipid}_predicted"]).abs().mean()
+                    mre = (train_df[lipid] - train_df[f"{lipid}_predicted"]).abs() / train_df[lipid].abs()
+                    r2 = 1 - (mse / train_df[lipid].var())
+                    log_accuracy_ratio = (np.sum(np.log(train_df[f"{lipid}_predicted"].values / train_df[lipid].values)))**2
+
+                    train_metrics = {
+                        "mse": mse.item(),
+                        "mae": mae.item(),
+                        "mre": mre.mean().item(),
+                        "r2": r2.item(),
+                        "correlation": correlation.item(),
+                        "log_accuracy_ratio": log_accuracy_ratio
+                    }
+
+                    fig, ax = plt.subplots(figsize=(10, 10))
+                    ax.plot([train_df[lipid].min(), train_df[lipid].max()],[train_df[lipid].min(), train_df[lipid].max()], "k--", lw=2)
+                    density_scatter(ax, train_df[lipid], train_df[f"{lipid}_predicted"],
+                                    x_min=train_df[lipid].min(), x_max=train_df[lipid].max(),
+                                    y_min=train_df[f"{lipid}_predicted"].min(), y_max=train_df[f"{lipid}_predicted"].max(),
+                                    s=0.1, alpha=0.1)
+                    ax.set_title(f"Train set: {lipid} vs {lipid}_predicted\nCorrelation: {correlation:.2f}")
+                    ax.set_xlabel(f"{lipid} (true)")
+                    ax.set_ylabel(f"{lipid} (predicted)")
+                    plt.savefig(train_plot_path / f"{lipid}_train.png")
+                    plt.close(fig)
+
+                    y_true = train_df[lipid].values
+                    y_pred = train_df[f"{lipid}_predicted"].values
+                    y_true = np.log10(y_true + 1e-10)
+                    y_pred = np.log10(y_pred + 1e-10)
+                    correlation = np.corrcoef(y_true, y_pred)[0, 1]
+                    fig, ax = plt.subplots(figsize=(10, 10))
+                    ax.plot([np.min(y_true), np.max(y_true)],
+                            [np.min(y_true), np.max(y_true)], "k--", lw=2)
+                    density_scatter(ax, y_true, y_pred,
+                                    x_min=np.min(y_true), x_max=np.max(y_true),
+                                    y_min=np.min(y_pred), y_max=np.max(y_pred),
+                                    s=0.1, alpha=0.1)
+                    ax.set_title(f"Train set: log({lipid}) vs log({lipid}_predicted)\nCorrelation: {correlation:.2f}")
+                    ax.set_xlabel(f"log10({lipid}) (true)")
+                    ax.set_ylabel(f"log10({lipid}) (predicted)")
+                    plt.savefig(train_plot_path / f"log_{lipid}_train.png")
+                    plt.close(fig)
+
+                # Now for the test set
+                correlation = test_df[lipid].corr(test_df[f"{lipid}_predicted"])
+                mse = ((test_df[lipid] - test_df[f"{lipid}_predicted"]) ** 2).mean()
+                mae = (test_df[lipid] - test_df[f"{lipid}_predicted"]).abs().mean()
+                mre = (test_df[lipid] - test_df[f"{lipid}_predicted"]).abs() / test_df[lipid].abs()
+                r2 = 1 - (mse / test_df[lipid].var())
+                log_accuracy_ratio= (np.sum(np.log(test_df[f"{lipid}_predicted"].values / test_df[lipid].values)))**2
+                test_metrics = {
+                    "mse": mse.item(),
+                    "mae": mae.item(),
+                    "mre": mre.mean().item(),
+                    "r2": r2.item(),
+                    "correlation": correlation.item(),
+                    "log_accuracy_ratio": log_accuracy_ratio
+                }
+
+                if plot_all:
+                    fig, ax = plt.subplots(figsize=(10, 10))
+                    ax.plot([test_df[lipid].min(), test_df[lipid].max()],[test_df[lipid].min(), test_df[lipid].max()], "k--", lw=2)
+                    density_scatter(ax, test_df[lipid], test_df[f"{lipid}_predicted"],
+                                    x_min=test_df[lipid].min(), x_max=test_df[lipid].max(),
+                                    y_min=test_df[f"{lipid}_predicted"].min(), y_max=test_df[f"{lipid}_predicted"].max(),
+                                    s=0.1, alpha=0.1)
+                    ax.set_title(f"Test set: {lipid} vs {lipid}_predicted\nCorrelation: {test_df[lipid].corr(test_df[f'{lipid}_predicted']):.2f}")
+                    ax.set_xlabel(f"{lipid} (true)")
+                    ax.set_ylabel(f"{lipid} (predicted)")
+                    plt.savefig(test_plot_path / f"{lipid}_test.png")
+                    plt.close(fig)
+
+                    y_true = test_df[lipid].values
+                    y_pred = test_df[f"{lipid}_predicted"].values
+                    y_true = np.log10(y_true + 1e-10)
+                    y_pred = np.log10(y_pred + 1e-10)
+                    correlation = np.corrcoef(y_true, y_pred)[0, 1]
+                    fig, ax = plt.subplots(figsize=(10, 10))
+                    ax.plot([np.min(y_true), np.max(y_true)],
+                            [np.min(y_true), np.max(y_true)], "k--", lw=2)
+                    density_scatter(ax, y_true, y_pred,
+                                    x_min=np.min(y_true), x_max=np.max(y_true),
+                                    y_min=np.min(y_pred), y_max=np.max(y_pred),
+                                    s=0.1, alpha=0.1)
+                    ax.set_title(f"Test set: log({lipid}) vs log({lipid}_predicted)\nCorrelation: {correlation:.2f}")
+                    ax.set_xlabel(f"log10({lipid}) (true)")
+                    ax.set_ylabel(f"log10({lipid}) (predicted)")
+                    plt.savefig(test_plot_path / f"log_{lipid}_test.png")
+                    plt.close(fig)
+
+                # Save metrics to a file
+                metrics_df = pd.DataFrame({
+                    "lipid": [lipid],
+                    "train_mse": [train_metrics["mse"]],
+                    "train_mae": [train_metrics["mae"]],
+                    "train_mre": [train_metrics["mre"]],
+                    "train_r2": [train_metrics["r2"]],
+                    "train_correlation": [train_metrics["correlation"]],
+                    "train_log_accuracy_ratio": [train_metrics["log_accuracy_ratio"]],
+                    "test_mse": [test_metrics["mse"]],
+                    "test_mae": [test_metrics["mae"]],
+                    "test_mre": [test_metrics["mre"]],
+                    "test_r2": [test_metrics["r2"]],
+                    "test_correlation": [test_metrics["correlation"]],
+                    "test_log_accuracy_ratio": [test_metrics["log_accuracy_ratio"]]
+                })
+                metrics_file = self.config.exp_path / "metrics.csv"
+                if metrics_file.exists():
+                    existing_metrics = pd.read_csv(metrics_file)
+                    metrics_df = pd.concat([existing_metrics, metrics_df], ignore_index=True)
+                metrics_df.to_csv(metrics_file )
+
+    @property
+    def true_values_train(self):
+        """
+        Returns the true values for the training set as a numpy array.
+        """
+        if self.train_data_original is None:
+            self.train_data_original = np.load(self.config.exp_path / "train" / "true_values.npy")
+
+        return self.train_data_original
+
+    @property
+    def true_values_test(self):
+        """
+        Returns the true values for the test set as a numpy array.
+        """
+        if self.test_data_original is None:
+            self.test_data_original = np.load(self.config.exp_path / "test" / "true_values.npy")
+
+        return self.test_data_original
+
+    @property
+    def predictions_train(self):
+        """
+        Returns the predictions for the training set as a numpy array.
+        """
+        train_path = self.config.exp_path / "train"
+        predictions_file = train_path / "predictions.npy"
+        if not predictions_file.exists():
+            logging.error("Predictions for the training set do not exist. Please run the experiment first.")
+            return None
+        return np.load(predictions_file)
+
+    @property
+    def predictions_test(self):
+        """
+        Returns the predictions for the test set as a numpy array.
+        """
+        test_path = self.config.exp_path / "test"
+        predictions_file = test_path / "predictions.npy"
+        if not predictions_file.exists():
+            logging.error("Predictions for the test set do not exist. Please run the experiment first.")
+            return None
+        return np.load(predictions_file)
+
+    @property
+    def ccf_train(self):
+        """
+        Returns the CCF coordinates for the training set as a numpy array.
+        """
+        if self.coordinates_train is None:
+            self.load_coord_train_data()
+        return self.coordinates_train.numpy()
+
+    @property
+    def ccf_test(self):
+        """
+        Returns the CCF coordinates for the test set as a numpy array.
+        """
+        if self.coordinates_test is None:
+            self.load_coord_test_data()
+        return self.coordinates_test.numpy()
+
+    @property
+    def sectionid_train(self):
+        """
+        Returns the section numbers for the training set as a pandas DataFrame.
+        """
+        self.train_sections = pd.read_parquet(self.config.maldi_file,
+                                              columns=["Section", "Sample"],
+                                              filters=self.train_filter)
+        # use sklearn to create unique ids from the concatenation of Section and Sample
+        self.train_sections["Section"] = self.train_sections["Section"].astype(str)
+        self.train_sections["Sample"] = self.train_sections["Sample"].astype(str)
+        # convert SectionID to integer
+        return pd.factorize(self.train_sections["Section"] + "_" + self.train_sections["Sample"])[0]
+
+    @property
+    def sectionid_test(self):
+        """
+        Returns the section numbers for the test set as a pandas DataFrame.
+        """
+        if self.test_sections is None:
+            self.test_sections = pd.read_parquet(self.config.maldi_file,
+                                                 columns=["Section", "Sample"],
+                                                 filters=self.test_filter)
+            # use sklearn to create unique ids from the concatenation of Section and Sample
+            self.test_sections["Section"] = self.test_sections["Section"].astype(str)
+            self.test_sections["Sample"] = self.test_sections["Sample"].astype(str)
+            self.test_sections["SectionID"] = self.test_sections["Section"] + "_" + self.test_sections["Sample"]
+            # convert SectionID to integer
+            self.test_sections["SectionID"] = pd.factorize(self.test_sections["SectionID"])[0]
+        return self.test_sections["SectionID"].values
+
+    @property
+    def pixel_train(self):
+        """
+        Returns the pixel coordinates for the training set as a numpy array.
+        """
+        if self.pixel_coordinates_train is None:
+            self.load_train_pixel_coordinates()
+        return self.pixel_coordinates_train
+
+    @property
+    def pixel_test(self):
+        """
+        Returns the pixel coordinates for the test set as a numpy array.
+        """
+        if self.pixel_coordinates_test is None:
+            self.load_test_pixel_coordinates()
+        return self.pixle_coordinates_test
+
+    def plot_lipid_distribution(self, sections: list[int], selected_lipid_indexes: list[int], dataset="train", add_scatter=False):
+        """
+        Generates a multi-column, two-row figure displaying the spatial distribution of
+        true and predicted lipid values for multiple sections and lipids.
+
+        Each column represents a (section, lipid_index) pair.
+        The top row shows true values, and the bottom row shows predicted values.
+        The coordinates (zccf, -yccf) are plotted, colored by lipid concentration.
+        Each column has its own thin, horizontal color bar positioned above its top subplot,
+        displaying only the two extreme values relevant to that column's lipid data.
+
+        Args:
+            sections (list[int]): A list of section numbers to filter the data by.
+            selected_lipid_indexes (list[int]): A list of indices of the lipids to plot,
+                                                corresponding to experiment.config.selected_lipids_names.
+        """
+        exp_path = self.config.exp_path
+        section_id = self.sectionid_train if dataset == "train" else self.sectionid_test
+        if len(sections) != len(selected_lipid_indexes):
+            print("Error: The 'sections' list and 'selected_lipid_indexes' list must have the same length.")
+            return
+
+        num_columns = len(sections)
+        if num_columns == 0:
+            print("No sections and lipid indexes provided for plotting.")
+            return
+
+        predictions_path = exp_path / "train"
+
+        # Load raw data from .npy files
+        true_values_raw = self.true_values_train if dataset == "train" else self.true_values_test
+        predictions_raw = self.predictions_train if dataset == "train" else self.predictions_test
+
+        # Convert numpy arrays to pandas DataFrames with appropriate column names
+        true_values_df = pd.DataFrame(data=true_values_raw, columns=self.config.selected_lipids_names)
+        predictions_df = pd.DataFrame(data=predictions_raw, columns=self.config.selected_lipids_names)
+        coordinates_df = pd.DataFrame(data=self.coordinates_train, columns=["xccf","yccf","zccf"])
+        sections_df = pd.DataFrame(data=section_id, columns=["Section"])
+
+        # Reset indices to ensure proper concatenation without misalignment
+        sections_df = sections_df.reset_index(drop=True)
+        true_values_df = true_values_df.reset_index(drop=True)
+        predictions_df = predictions_df.reset_index(drop=True)
+        coordinates_df = coordinates_df.reset_index(drop=True)
+
+        # Concatenate all relevant data into single DataFrames for easier filtering
+        true_values_full = pd.concat([true_values_df, sections_df, coordinates_df], axis=1)
+        predictions_full = pd.concat([predictions_df, sections_df, coordinates_df], axis=1)
+
+        # Create a figure with two rows and `num_columns` columns
+        # Increased figsize height slightly to accommodate individual colorbars better
+        if add_scatter:
+        # Ensure axes is always a 2D array, even for a single column
+            fig, axes = plt.subplots(3, num_columns, figsize=(5 * num_columns, 16))
+        else:
+            fig, axes = plt.subplots(2, num_columns, figsize=(5 * num_columns, 12))
+        if num_columns == 1:
+            axes = np.array([axes]).reshape(2, 1)
+
+        # Iterate through each column (each section-lipid pair)
+        for col_idx in range(num_columns):
+            section = sections[col_idx]
+            selected_lipid_index = selected_lipid_indexes[col_idx]
+
+            try:
+                current_lipid = self.config.selected_lipids_names[selected_lipid_index]
+            except IndexError:
+                print(f"Invalid lipid index: {selected_lipid_index} for column {col_idx+1}. Please choose an index within the range [0, {len(self.config.selected_lipids_names) - 1}]. Skipping this column.")
+                axes[0, col_idx].set_title(f'Skipped: Invalid Lipid Index', fontsize=12, color='red')
+                axes[1, col_idx].set_title(f'Skipped: Invalid Lipid Index', fontsize=12, color='red')
+                # Hide axes ticks/labels for skipped columns for cleaner look
+                axes[0, col_idx].set_xticks([])
+                axes[0, col_idx].set_yticks([])
+                axes[1, col_idx].set_xticks([])
+                axes[1, col_idx].set_yticks([])
+                continue
+
+            true_values_section = true_values_full[true_values_full.Section == section]
+            predictions_section = predictions_full[predictions_full.Section == section]
+
+            if true_values_section.empty or predictions_section.empty:
+                print(f"No data found for Section {section} for column {col_idx+1}. Skipping this column.")
+                axes[0, col_idx].set_title(f'Skipped: No Data for Sec {section}', fontsize=12, color='red')
+                axes[1, col_idx].set_title(f'Skipped: No Data for Sec {section}', fontsize=12, color='red')
+                # Hide axes ticks/labels for skipped columns for cleaner look
+                axes[0, col_idx].set_xticks([])
+                axes[0, col_idx].set_yticks([])
+                axes[1, col_idx].set_xticks([])
+                axes[1, col_idx].set_yticks([])
+                continue
+
+            # Determine min and max values for the current column's lipid data
+            column_lipid_values = pd.concat([
+                true_values_section[current_lipid],
+                predictions_section[current_lipid]
+            ])
+            column_min_val = column_lipid_values.min()
+            column_max_val = column_lipid_values.max()
+
+            # --- Plot for True Values (Top Row) ---
+            scatter_true = axes[0, col_idx].scatter(
+                true_values_section.zccf,
+                -true_values_section.yccf,
+                c=true_values_section[current_lipid].values,
+                s=0.5,
+                cmap='viridis',
+                alpha=0.8,
+                vmin=column_min_val, # Use column-specific min/max
+                vmax=column_max_val  # Use column-specific min/max
+            )
+            axes[0, col_idx].set_title(f'True: {current_lipid}\n(Sec {section})', fontsize=12)
+            axes[0, col_idx].set_xlabel('Z-coordinate (zccf)', fontsize=10)
+            axes[0, col_idx].set_ylabel('-Y-coordinate (-yccf)', fontsize=10)
+            axes[0, col_idx].set_aspect('equal', adjustable='box')
+            axes[0, col_idx].grid(True, linestyle='--', alpha=0.6)
+
+            # --- Plot for Predicted Values (Bottom Row) ---
+            scatter_pred = axes[1, col_idx].scatter(
+                predictions_section.zccf,
+                -predictions_section.yccf,
+                c=predictions_section[current_lipid].values,
+                s=0.5,
+                cmap='viridis',
+                alpha=0.8,
+                vmin=column_min_val, # Use column-specific min/max
+                vmax=column_max_val  # Use column-specific min/max
+            )
+            axes[1, col_idx].set_title(f'Pred: {current_lipid}\n(Sec {section})', fontsize=12)
+            axes[1, col_idx].set_xlabel('Z-coordinate (zccf)', fontsize=10)
+            axes[1, col_idx].set_ylabel('-Y-coordinate (-yccf)', fontsize=10)
+            axes[1, col_idx].set_aspect('equal', adjustable='box')
+            axes[1, col_idx].grid(True, linestyle='--', alpha=0.6)
+
+            # --- Individual Horizontal Colorbar for the current column ---
+            pos_top_subplot = axes[0, col_idx].get_position()
+            # Define position for the colorbar above the current column's top subplot
+            # Adjusted 'bottom' slightly up (from 0.05 to 0.06) for more space
+            colorbar_ax_position = [pos_top_subplot.x0, pos_top_subplot.y1 + 0.06, pos_top_subplot.width, 0.01]
+
+            cbar_ax = fig.add_axes(colorbar_ax_position)
+            fig.colorbar(scatter_true, cax=cbar_ax, orientation='horizontal',
+                         label=f'{current_lipid} Concentration', # Label specific to this lipid
+                         ticks=[column_min_val, column_max_val])
+            cbar_ax.xaxis.set_ticks_position('top') # Place ticks on top of the colorbar
+            cbar_ax.xaxis.set_label_position('top') # Place label on top of the colorbar
+            if add_scatter:
+                # --- Scatter Plot for the current section and lipid ---
+                scatter_ax = axes[2, col_idx]
+                true_value = true_values_section[current_lipid].values
+                predicted_value = predictions_section[current_lipid].values
+                true_min = np.nanmin(true_value)
+                true_max = np.nanmax(true_value)
+                predicted_min = np.nanmin(predicted_value)
+                predicted_max = np.nanmax(predicted_value)
+                correlation = true_values_section[current_lipid].corr(predictions_section[current_lipid])
+                scatter_ax.plot([true_min, true_max],[true_min, true_max], "k--", lw=2)
+                density_scatter(scatter_ax, true_value, predicted_value,
+                                x_min=true_min, x_max=true_max,
+                                y_min=predicted_min, y_max=predicted_max,
+                                s=0.1, alpha=0.1)
+                scatter_ax.set_title(f"True: {current_lipid} vs {current_lipid} Predicted\nCorrelation: {correlation:.2f}")
+                scatter_ax.set_xlabel(f"{current_lipid} (true)")
+                scatter_ax.set_ylabel(f"{current_lipid} (predicted)")
+        # Adjust layout to make space for the top colorbars and prevent overlap
+        # Increased rect top margin to 0.9 for more overall space
+        plt.tight_layout(rect=[0, 0, 1, 0.9])
+        plt.suptitle('Lipid Distribution: True vs. Predicted Values', y=0.99, fontsize=16) # Overall title
+
+    @property
+    def train_mean(self):
+        """
+        Returns the mean of the training data.
+        """
+        if self.col_means is None:
+            self.col_means = torch.load(self.config.exp_path / "lipid_means.pth")
+        return self.col_means.to(self.config.device)
+
+    @property
+    def train_std(self):
+        """
+        Returns the standard deviation of the training data.
+        """
+        if self.col_stds is None:
+            self.col_stds = torch.load(self.config.exp_path / "lipid_stds.pth")
+        return self.col_stds.to(self.config.device)
+
+    def plot_lipid_scatter(self, lipid, dataset="train"):
+        """
+        Generates a scatter plot for the lipid distribution in the specified sections and lipids.
+
+        Args:
+            sections (list[int]): A list of section numbers to filter the data by.
+            selected_lipid_indexes (list[int]): A list of indices of the lipids to plot,
+                                                corresponding to experiment.config.selected_lipids_names.
+        """
+        true_values = self.true_values_train if dataset == "train" else self.true_values_test
+        predictions = self.predictions_train if dataset == "train" else self.predictions_test
+        fig, ax = plt.subplots(figsize=(10, 10))
+        if lipid not in self.config.selected_lipids_names:
+            print(f"Lipid {lipid} not found in the selected lipids.")
+            return
+        lipid_index = self.config.selected_lipids_names.index(lipid)
+        true_values_lipid = true_values[:, lipid_index]
+        predictions_lipid = predictions[:, lipid_index]
+        true_min = np.nanmin(true_values_lipid)
+        true_max = np.nanmax(true_values_lipid)
+        predicted_min = np.nanmin(predictions_lipid)
+        predicted_max = np.nanmax(predictions_lipid)
+        correlation = np.corrcoef(true_values_lipid, predictions_lipid)[0, 1]
+        ax.plot([true_min, true_max],[true_min, true_max], "k--", lw=2)
+        density_scatter(ax, true_values_lipid, predictions_lipid,
+                        x_min=true_min, x_max=true_max,
+                        y_min=predicted_min, y_max=predicted_max,
+                        s=0.1, alpha=0.1)
+        ax.set_title(f"True: {lipid} vs {lipid} Predicted\nCorrelation: {correlation:.2f}")
+        ax.set_xlabel(f"{lipid} (true)")
+        ax.set_ylabel(f"{lipid} (predicted)")
+        plt.show()
+
+    def whole_brain_reconstruction(self):
+        if(self.config.exp_path / "model.pth").exists():
+            logging.info("Loading model from file")
+            self.lgp_model.load_state_dict(torch.load(self.config.exp_path / "model.pth", map_location=self.config.device))
+            logging.info("Model loaded successfully")
+        else:
+            logging.error("Model not found. Please run the experiment first.")
+            return
+
+        volume_path = self.config.exp_path / "volume"
+        volume_path.mkdir(parents=True, exist_ok=True)
+        template_file = volume_path / "template_volume.npy"
+        if not template_file.exists():
+            logging.info("Downloading template volume...")
+            from allensdk.core.mouse_connectivity_cache import MouseConnectivityCache
+            # Specify the resolution you want for the template volume (in microns)
+            resolution_um = 25
+            mcc = MouseConnectivityCache(resolution=resolution_um)
+            logging.info(f"Downloading/loading reference TEMPLATE volume at {resolution_um} um resolution...")
+            template_volume, _ = mcc.get_template_volume()
+            logging.info(f"Template volume shape: {template_volume.shape}")
+            logging.info(f"Template volume data type: {template_volume.dtype}")
+            np.save(template_file, template_volume)
+        else:
+            logging.info("Template volume already exists, loading from file")
+            template_volume = np.load(template_file)
+        non_zero_indices = np.argwhere(template_volume > 5)
+        # concert from 25 um to 1 mm
+        non_zero_ccf = non_zero_indices * 0.025
+        non_zero_ccf = torch.tensor(non_zero_ccf, dtype=torch.float32)
+        non_zero_ccf = (non_zero_ccf - self.coord_mean) / self.coord_std
+        ccf_dataset = torch.utils.data.TensorDataset(torch.tensor(non_zero_ccf, dtype=torch.float32), torch.tensor(non_zero_indices, dtype=torch.float32))
+        ccf_dataloader = torch.utils.data.DataLoader(ccf_dataset, batch_size=self.config.batch_size, shuffle=False, num_workers=0)
+        logging.info("Reconstructing whole brain volume...")
+
+        self.lgp_model.eval()
+        with torch.no_grad():
+            for i,batch in enumerate(tqdm(ccf_dataloader)):
+                batch_file = volume_path / f"batch_{i}.pth"
+                if batch_file.exists():
+                    logging.info(f"Batch {i} already exists, skipping...")
+                    continue
+                coordinates_batch = batch[0].to(self.config.device)
+                indices_batch = batch[1]
+                predictions, gp_posterior = self.lgp_model.predict(coordinates_batch)
+                # we save the coordinates the indices and the predictions in a single file
+                predictions = predictions * self.train_std + self.train_mean
+                predictions = predictions.detach().cpu().numpy()
+                if self.config.log_transform:
+                    predictions = np.exp(predictions) - 1e-10
+                torch.save({
+                    "coordinates": coordinates_batch.cpu(),
+                    "indices": indices_batch.cpu(),
+                    "predictions": predictions,
+                    "posterior": gp_posterior.mean.detach().cpu()
+                }, batch_file)
+
+    def load_whole_brain_reconstruction(self, lipid):
+        """
+        Loads the whole brain reconstruction for a specific lipid.
+        """
+        volume_path = self.config.exp_path / "volume"
+        template_file = volume_path / "template_volume.npy"
+        if not template_file.exists():
+            logging.error("Template volume does not exist. Please run whole_brain_reconstruction() first.")
+            return None
+        template_volume = np.load(template_file)
+        non_zero_indices = np.argwhere(template_volume > 5)
+        # fill template volume with zeros
+        template_volume = np.zeros_like(template_volume, dtype=np.float32)
+
+        lipid_name = self.config.selected_lipids_names[lipid]
+        lipid_volume_name = self.config.exp_path / f"{lipid_name}_volume.npy"
+        if lipid_volume_name.exists():
+            logging.info(f"Lipid volume for {lipid_name} already exists, loading from file")
+            lipid_volume = np.load(lipid_volume_name)
+            return lipid_volume
+        else:
+            for i in tqdm(range(len(non_zero_indices) // self.config.batch_size + 1)):
+                batch_file = volume_path / f"batch_{i}.pth"
+                if not batch_file.exists():
+                    continue
+                batch_data = torch.load(batch_file)
+                template_volume[batch_data["indices"][:, 0].long(),
+                                batch_data["indices"][:, 1].long(),
+                                batch_data["indices"][:, 2].long()] = batch_data["predictions"][:, lipid]
+            # Save the reconstructed lipid volume
+            # We need to ensure the volume is saved in the same shape as the template
+            # set 0 to nan
+            template_volume[template_volume == 0] = np.nan
+
+            np.save(lipid_volume_name, template_volume)
+            logging.info(f"Lipid volume for {lipid_name} saved to {lipid_volume_name}")
+            template_volume = 255*( template_volume - np.nanmin(template_volume)) / (np.nanmax(template_volume)- np.nanmin(template_volume))
+            np.save(self.config.exp_path / f"{lipid_name}_volume255.npy", template_volume)
+            return template_volume
