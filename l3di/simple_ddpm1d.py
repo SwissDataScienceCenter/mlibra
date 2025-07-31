@@ -147,6 +147,13 @@ class SimpleDDPM1D(nn.Module):
     
     A simplified, transparent DDPM implementation with training and inference loops.
     Always uses conditional generation with low-res conditioning and z-vector.
+    
+    Key differences from standard DDPM:
+    1. Conditional generation: Always uses both low-res conditioning and z-vector
+    2. Modified forward process: x_t = x_start * sqrt_alpha_bar + low_res + eps * minus_sqrt_alpha_bar
+    3. Modified posterior calculation: Includes conditioning in the mean calculation
+    4. Classifier-free guidance: Can interpolate between conditional and unconditional outputs
+    5. Final sample processing: Removes conditioning bias in the final step
     """
     
     def __init__(
@@ -223,7 +230,12 @@ class SimpleDDPM1D(nn.Module):
         )
     
     def _predict_xstart_from_eps(self, x_t, t, eps, cond):
-        """Predict x_0 from noise eps"""
+        """
+        Predict x_0 from noise eps, incorporating conditioning
+        
+        Modified from standard DDPM to include conditioning:
+        x_0 = sqrt_recip_alphas_cumprod * x_t - sqrt_recip_alphas_cumprod * cond - sqrt_recipm1_alphas_cumprod * eps
+        """
         assert x_t.shape == eps.shape
         assert cond is not None, "Conditioning must be provided"
         assert cond.shape == x_t.shape
@@ -236,7 +248,12 @@ class SimpleDDPM1D(nn.Module):
     def get_posterior_mean_covariance(
         self, x_t, t, clip_denoised=False, cond=None, z_vae=None, guidance_weight=0.0
     ):
-        """Compute posterior mean and covariance for the backward diffusion process"""
+        """
+        Compute posterior mean and covariance for the backward diffusion process
+        
+        Modified from standard DDPM to include conditioning in posterior mean:
+        post_mean = post_coeff_1 * x_recons + post_coeff_2 * x_t + post_coeff_3 * cond
+        """
         B = x_t.size(0)
         t_ = torch.full((x_t.size(0),), t, device=x_t.device, dtype=torch.long)
         assert t_.shape == torch.Size([B,])
@@ -249,6 +266,7 @@ class SimpleDDPM1D(nn.Module):
         if guidance_weight == 0:
             eps_score = self.decoder(x_t, t_, low_res=cond, z=z_vae)
         else:
+            # Classifier-free guidance: interpolate between conditional and unconditional outputs
             eps_score = (1 + guidance_weight) * self.decoder(
                 x_t, t_, low_res=cond, z=z_vae
             ) - guidance_weight * self.decoder(
@@ -265,7 +283,7 @@ class SimpleDDPM1D(nn.Module):
         if clip_denoised:
             x_recons.clamp_(-1.0, 1.0)
         
-        # Compute posterior mean from the reconstruction
+        # Compute posterior mean from the reconstruction (includes conditioning)
         post_mean = (
             extract(self.post_coeff_1, t_, x_t.shape) * x_recons
             + extract(self.post_coeff_2, t_, x_t.shape) * x_t
@@ -302,7 +320,15 @@ class SimpleDDPM1D(nn.Module):
         return post_mean, post_variance, post_log_variance
     
     def compute_noisy_input(self, x_start, eps, t, low_res):
-        """Computes noisy input for a given timestep in the forward process"""
+        """
+        Computes noisy input for a given timestep in the forward process
+        
+        Modified from standard DDPM to include conditioning:
+        x_t = x_start * sqrt_alpha_bar + low_res + eps * minus_sqrt_alpha_bar
+        
+        In standard DDPM this would be:
+        x_t = x_start * sqrt_alpha_bar + eps * minus_sqrt_alpha_bar
+        """
         assert eps.shape == x_start.shape
         assert low_res is not None, "Conditioning (low_res) must be provided"
         assert low_res.shape == x_start.shape
@@ -325,8 +351,22 @@ class SimpleDDPM1D(nn.Module):
         ddpm_latents=None,
         clip_denoised=False
     ):
-        """Generate samples using the trained model"""
-        # The sampling process goes here. This sampler also supports truncated sampling.
+        """
+        Generate samples using the trained model
+        
+        Args:
+            x_t: Starting noise tensor
+            cond: Conditioning signal (low-res)
+            z_vae: Z vector from VAE
+            n_steps: Number of denoising steps (default: self.T)
+            guidance_weight: Weight for classifier-free guidance
+            checkpoints: Timesteps to save intermediate results
+            ddpm_latents: Pre-defined random noise for each step (for reproducibility)
+            clip_denoised: Whether to clip values to [-1, 1] during denoising
+            
+        Returns:
+            Dictionary of generated samples at specified checkpoints
+        """
         x = x_t
         B, *_ = x_t.shape
         sample_dict = {}
@@ -376,8 +416,8 @@ class SimpleDDPM1D(nn.Module):
             x = post_mean + nonzero_mask * torch.exp(0.5 * post_log_variance) * z
             
             if t == 0:
-                # In the final step we remove the vae reconstruction bias
-                # added to the images as it degrades quality
+                # In the final step we remove the conditioning bias
+                # This is specific to this implementation and differs from standard DDPM
                 x -= cond
                 # TODO what happens if we don't do that?
                 # x += cond
