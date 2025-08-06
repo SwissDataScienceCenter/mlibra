@@ -66,37 +66,24 @@ for cur_file in tqdm(files, desc="Processing volumes"):
                           # Lower value = more transparent
     )
 
-    # --- 3. Prepare for Screenshots of 3D Isometric Views from different angles ---
+    # --- 3. Prepare for Screenshots of 3D View Rotation ---
     viewer.dims.ndisplay = 3
     viewer.camera.zoom = 0.7 # Adjust zoom as needed
     
-    # Get 3D isometric views from different angles to match each cut direction
-    isometric_views = []
-    
-    # Coronal view - looking from front (X-Z plane)
-    viewer.camera.angles = (90, 0, 0)  # Front view for coronal (elevation, azimuth, roll)
-    QApplication.processEvents()
-    time.sleep(0.5)
-    coronal_isometric = viewer.screenshot(path=None)
-    isometric_views.append(coronal_isometric)
-    
-    # Axial view - looking from top (X-Y plane)
-    viewer.camera.angles = (0, 0, 0)  # Top-down view for axial
-    QApplication.processEvents()
-    time.sleep(0.5)
-    axial_isometric = viewer.screenshot(path=None)
-    isometric_views.append(axial_isometric)
-    
-    # Sagittal view - looking from side (Y-Z plane)
-    viewer.camera.angles = (90, 90, 0)  # Side view for sagittal
-    QApplication.processEvents()
-    time.sleep(0.5)
-    sagittal_isometric = viewer.screenshot(path=None)
-    isometric_views.append(sagittal_isometric)
+    # Capture 10 frames of rotation for the last row
+    rotation_frames = []
+    for i in range(10):
+        # Rotate around y-axis (36 degree increments for a full 360 rotation)
+        angle = i * 36
+        viewer.camera.angles = (45, angle, 0)  # (elevation, azimuth, roll)
+        QApplication.processEvents()
+        time.sleep(0.5)
+        rotation_screenshot = viewer.screenshot(path=None)
+        rotation_frames.append(rotation_screenshot)
 
     # --- 4. Combine Screenshots into a Multi-Panel Matplotlib Figure ---
-    # Create a larger figure with 3 rows (one for each plane) and 11 columns (10 slices + isometric)
-    fig, axs = plt.subplots(nrows=3, ncols=11, figsize=(30, 10))
+    # Create a larger figure with 4 rows (3 for cuts, 1 for rotation) and 10 columns
+    fig, axs = plt.subplots(nrows=4, ncols=10, figsize=(30, 13))
     fig.suptitle(f"Mice Brain Visualization: {cur_volume_name}", fontsize=16)
     
     # Switch to 2D display for slice views
@@ -185,8 +172,6 @@ for cur_file in tqdm(files, desc="Processing volumes"):
     for i, x_pos in enumerate(x_positions):
         # Get the sagittal slice and flip it horizontally
         sagittal_data = volume[:, :, x_pos]
-        # Flip the sagittal data along the horizontal axis (left-right flip)
-        #sagittal_data = np.fliplr(sagittal_data)
 
         sagittal_layer = viewer.add_image(
             sagittal_data,
@@ -205,12 +190,12 @@ for cur_file in tqdm(files, desc="Processing volumes"):
     # Restore the main volume visibility
     main_volume_layer.visible = True
     
-    # Add the matching isometric view to the last column of each row
-    for i in range(3):
-        axs[i, 10].imshow(isometric_views[i])
-        view_names = ["Axial Orientation", "Coronal Orientation", "Sagittal Orientation"]
-        axs[i, 10].set_title(f"3D View - {view_names[i]}", fontsize=8)
-        axs[i, 10].axis('off')
+    # Add the rotation frames to the last row
+    for i in range(10):
+        axs[3, i].imshow(rotation_frames[i])
+        angle = i * 36
+        axs[3, i].set_title(f"3D Rotation - {angle}°", fontsize=8)
+        axs[3, i].axis('off')
 
     # Reduce whitespace between plots
     plt.subplots_adjust(wspace=0.02, hspace=0.1)
