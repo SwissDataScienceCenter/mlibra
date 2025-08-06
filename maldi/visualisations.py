@@ -148,7 +148,7 @@ for cur_file in tqdm(files, desc="Processing volumes"):
         time.sleep(0.5)
         coronal_screenshot = viewer.screenshot(path=None)
         axs[0, i].imshow(coronal_screenshot)
-        axs[0, i].set_title(f"Coronal (X-Z) - {position_labels[i]}")
+        axs[0, i].set_title(f"Axial (X-Y) - {position_labels[i]}")
         axs[0, i].axis('off')
         viewer.layers.remove(coronal_layer)  # Remove the layer after screenshot
     
@@ -165,7 +165,7 @@ for cur_file in tqdm(files, desc="Processing volumes"):
         time.sleep(0.5)
         axial_screenshot = viewer.screenshot(path=None)
         axs[1, i].imshow(axial_screenshot)
-        axs[1, i].set_title(f"Axial (X-Y) - {position_labels[i]}")
+        axs[1, i].set_title(f"Coronal (X-Z) - {position_labels[i]}")
         axs[1, i].axis('off')
         viewer.layers.remove(axial_layer)  # Remove the layer after screenshot
     
@@ -192,7 +192,7 @@ for cur_file in tqdm(files, desc="Processing volumes"):
     # Add the matching isometric view to the last column of each row
     for i in range(3):
         axs[i, 6].imshow(isometric_views[i])
-        view_names = ["Coronal Orientation", "Axial Orientation", "Sagittal Orientation"]
+        view_names = ["Axial Orientation", "Coronal Orientation", "Sagittal Orientation"]
         axs[i, 6].set_title(f"3D View - {view_names[i]}")
         axs[i, 6].axis('off')
 
