@@ -52,15 +52,10 @@ for cur_file in tqdm(files, desc="Processing volumes"):
     else:
         volume = np.zeros_like(volume) # Handle flat volumes
 
-    # Create a custom colormap for intensity-based transparency
-    #custom_colormap = create_intensity_colormap()
-
     # --- 1. Create the napari viewer for the current volume ---
     viewer = napari.Viewer()
 
     # Add the main volume layer with volume rendering and custom transparency
-    # 'attenuation' helps control how light passes through the volume,
-    # making the transparency more pronounced.
     main_volume_layer = viewer.add_image(
         volume,
         name=f'{cur_volume_name}_intensity',
@@ -79,50 +74,76 @@ for cur_file in tqdm(files, desc="Processing volumes"):
     # Set camera for an isometric-like view (azimuth, elevation, roll)
     # These angles provide a good starting point for an isometric perspective.
     viewer.camera.angles = (30+180, 45+180, 0+180) # (elevation, azimuth, roll)
-    # Give napari a moment to render the view before screenshotting
-   # viewer.window.qt_viewer.update_console()
     QApplication.processEvents()
-    time.sleep(0.1)
+    time.sleep(0.5)
     isometric_screenshot = viewer.screenshot(path=None) # Take screenshot as numpy array
-
-    # Now, switch to 2D display and take screenshots of cuts
-    viewer.dims.ndisplay = 2
-    # Close the napari viewer after taking all screenshots for this volume
 
     # --- 4. Combine Screenshots into a Multi-Panel Matplotlib Figure ---
     fig, axs = plt.subplots(nrows=2, ncols=2, figsize=(12, 10))
     fig.suptitle(f"Mice Brain Visualization: {cur_volume_name}", fontsize=16)
     
-    # Axial Cut (X-Y plane, changing Z)
-    axial_slice_index = volume.shape[0] // 2  # Middle slice along Z axis
-    viewer.dims.set_point(0, axial_slice_index)  # Set Z axis slice
+    # Switch to 2D display for slice views
+    viewer.dims.ndisplay = 2
+    
+    # Get the midpoints for each axis
+    z_mid = volume.shape[0] // 2
+    y_mid = volume.shape[1] // 2
+    x_mid = volume.shape[2] // 2
+    
+    # Axial Cut (X-Y plane, viewing from top, changing Z)
+    # Create a separate layer with fixed Z slice
+    axial_data = volume[z_mid, :, :]
+    axial_layer = viewer.add_image(
+        axial_data,
+        name='axial_slice',
+        colormap='inferno',
+        visible=True
+    )
+    main_volume_layer.visible = False  # Hide the volume temporarily
     QApplication.processEvents()
-    time.sleep(0.9)
+    time.sleep(0.5)
     axial_screenshot = viewer.screenshot(path=None)
     axs[0, 0].imshow(axial_screenshot)
     axs[0, 0].set_title("Axial Cut (X-Y plane)")
     axs[0, 0].axis('off')
+    viewer.layers.remove(axial_layer)  # Remove the layer after screenshot
     
-    # Coronal Cut (X-Z plane, changing Y)
-    coronal_slice_index = volume.shape[1] // 2  # Middle slice along Y axis
-    viewer.dims.set_point(1, coronal_slice_index)  # Set Y axis slice
+    # Coronal Cut (X-Z plane, viewing from front, changing Y)
+    coronal_data = volume[:, y_mid, :]
+    coronal_layer = viewer.add_image(
+        coronal_data, 
+        name='coronal_slice',
+        colormap='inferno',
+        visible=True
+    )
     QApplication.processEvents()
-    time.sleep(0.9)
+    time.sleep(0.5)
     coronal_screenshot = viewer.screenshot(path=None)
     axs[0, 1].imshow(coronal_screenshot)
     axs[0, 1].set_title("Coronal Cut (X-Z plane)")
     axs[0, 1].axis('off')
-
-    # Sagittal Cut (Y-Z plane, changing X)
-    sagittal_slice_index = volume.shape[2] // 2  # Middle slice along X axis
-    viewer.dims.set_point(2, sagittal_slice_index)  # Set X axis slice
+    viewer.layers.remove(coronal_layer)  # Remove the layer after screenshot
+    
+    # Sagittal Cut (Y-Z plane, viewing from side, changing X)
+    sagittal_data = volume[:, :, x_mid]
+    sagittal_layer = viewer.add_image(
+        sagittal_data,
+        name='sagittal_slice',
+        colormap='inferno',
+        visible=True
+    )
     QApplication.processEvents()
-    time.sleep(0.9)
+    time.sleep(0.5)
     sagittal_screenshot = viewer.screenshot(path=None)
     axs[1, 0].imshow(sagittal_screenshot)
     axs[1, 0].set_title("Sagittal Cut (Y-Z plane)")
     axs[1, 0].axis('off')
+    viewer.layers.remove(sagittal_layer)  # Remove the layer after screenshot
+    
+    # Restore the main volume visibility
+    main_volume_layer.visible = True
 
+    # Add the isometric view
     axs[1, 1].imshow(isometric_screenshot)
     axs[1, 1].set_title("Isometric 3D View")
     axs[1, 1].axis('off')
