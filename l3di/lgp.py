@@ -177,6 +177,20 @@ class LGP(nn.Module):
         x_reconstructed = self.decode(latent_forward)
         return x_reconstructed, gp_posterior
 
+    def encode(self, coords):
+        """
+        Encode the coordinates using the GP model.
+        This method is not used in the current implementation but can be useful for future extensions.
+        """
+        gp_posterior = self.gp_model(coords)
+        return gp_posterior.mean, gp_posterior.variance
+
+    def reparametrize(self, mu, logvar):
+        """
+        We only return the mean of the GP posterior.
+        """
+        return mu
+
     def predict(self, coords):
         with torch.no_grad():
             gp_posterior = self.gp_model(coords)
@@ -311,10 +325,15 @@ class GPVAE(nn.Module):
     def predict(self, x, coords):
         with torch.no_grad():
             mean, log_var, _ = self.encode(x)
-            gp_posterior = self.gp_model(coords)
-            gp_sample = gp_posterior.sample()
+            gp_sample = self.sample_from_gp(coords)
             x_reconstructed, x_mu = self.decode(gp_sample)
             return x_reconstructed, mean, log_var, x_mu, gp_posterior
+
+    def sample_from_gp(self, coords):
+        with torch.no_grad():
+            gp_posterior = self.gp_model(coords)
+            gp_sample = gp_posterior.sample()
+            return gp_sample
 
     def _compute_kl_z(self, mu_z, std_z, p_z_mean, p_z_stddev):
         kl_per_dim = []
