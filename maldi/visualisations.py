@@ -79,74 +79,96 @@ for cur_file in tqdm(files, desc="Processing volumes"):
     isometric_screenshot = viewer.screenshot(path=None) # Take screenshot as numpy array
 
     # --- 4. Combine Screenshots into a Multi-Panel Matplotlib Figure ---
-    fig, axs = plt.subplots(nrows=2, ncols=2, figsize=(12, 10))
+    # Create a larger figure with 3 rows (one for each plane) and 4 columns (3 slices + isometric)
+    fig, axs = plt.subplots(nrows=3, ncols=4, figsize=(16, 12))
     fig.suptitle(f"Mice Brain Visualization: {cur_volume_name}", fontsize=16)
     
     # Switch to 2D display for slice views
     viewer.dims.ndisplay = 2
     
-    # Get the midpoints for each axis
-    z_mid = volume.shape[0] // 2
-    y_mid = volume.shape[1] // 2
-    x_mid = volume.shape[2] // 2
+    # Calculate slice positions for beginning (20%), middle (50%), and end (80%)
+    # For each axis
+    z_positions = [
+        int(volume.shape[0] * 0.2),  # Beginning (20%)
+        volume.shape[0] // 2,         # Middle (50%)
+        int(volume.shape[0] * 0.8)    # End (80%)
+    ]
     
-    # Axial Cut (X-Y plane, viewing from top, changing Z)
-    # Create a separate layer with fixed Z slice
-    axial_data = volume[z_mid, :, :]
-    axial_layer = viewer.add_image(
-        axial_data,
-        name='axial_slice',
-        colormap='inferno',
-        visible=True
-    )
-    main_volume_layer.visible = False  # Hide the volume temporarily
-    QApplication.processEvents()
-    time.sleep(0.5)
-    axial_screenshot = viewer.screenshot(path=None)
-    axs[0, 0].imshow(axial_screenshot)
-    axs[0, 0].set_title("Axial Cut (X-Y plane)")
-    axs[0, 0].axis('off')
-    viewer.layers.remove(axial_layer)  # Remove the layer after screenshot
+    y_positions = [
+        int(volume.shape[1] * 0.2),  # Beginning (20%)
+        volume.shape[1] // 2,         # Middle (50%)
+        int(volume.shape[1] * 0.8)    # End (80%)
+    ]
     
-    # Coronal Cut (X-Z plane, viewing from front, changing Y)
-    coronal_data = volume[:, y_mid, :]
-    coronal_layer = viewer.add_image(
-        coronal_data, 
-        name='coronal_slice',
-        colormap='inferno',
-        visible=True
-    )
-    QApplication.processEvents()
-    time.sleep(0.5)
-    coronal_screenshot = viewer.screenshot(path=None)
-    axs[0, 1].imshow(coronal_screenshot)
-    axs[0, 1].set_title("Coronal Cut (X-Z plane)")
-    axs[0, 1].axis('off')
-    viewer.layers.remove(coronal_layer)  # Remove the layer after screenshot
+    x_positions = [
+        int(volume.shape[2] * 0.2),  # Beginning (20%)
+        volume.shape[2] // 2,         # Middle (50%)
+        int(volume.shape[2] * 0.8)    # End (80%)
+    ]
     
-    # Sagittal Cut (Y-Z plane, viewing from side, changing X)
-    sagittal_data = volume[:, :, x_mid]
-    sagittal_layer = viewer.add_image(
-        sagittal_data,
-        name='sagittal_slice',
-        colormap='inferno',
-        visible=True
-    )
-    QApplication.processEvents()
-    time.sleep(0.5)
-    sagittal_screenshot = viewer.screenshot(path=None)
-    axs[1, 0].imshow(sagittal_screenshot)
-    axs[1, 0].set_title("Sagittal Cut (Y-Z plane)")
-    axs[1, 0].axis('off')
-    viewer.layers.remove(sagittal_layer)  # Remove the layer after screenshot
+    # Axial Cuts (X-Y plane, viewing from top, changing Z)
+    for i, z_pos in enumerate(z_positions):
+        axial_data = volume[z_pos, :, :]
+        axial_layer = viewer.add_image(
+            axial_data,
+            name=f'axial_slice_{i}',
+            colormap='inferno',
+            visible=True
+        )
+        main_volume_layer.visible = False  # Hide the volume temporarily
+        QApplication.processEvents()
+        time.sleep(0.5)
+        axial_screenshot = viewer.screenshot(path=None)
+        axs[0, i].imshow(axial_screenshot)
+        position_label = "Beginning" if i == 0 else "Middle" if i == 1 else "End"
+        axs[0, i].set_title(f"Axial (X-Y) - {position_label}")
+        axs[0, i].axis('off')
+        viewer.layers.remove(axial_layer)  # Remove the layer after screenshot
+    
+    # Coronal Cuts (X-Z plane, viewing from front, changing Y)
+    for i, y_pos in enumerate(y_positions):
+        coronal_data = volume[:, y_pos, :]
+        coronal_layer = viewer.add_image(
+            coronal_data, 
+            name=f'coronal_slice_{i}',
+            colormap='inferno',
+            visible=True
+        )
+        QApplication.processEvents()
+        time.sleep(0.5)
+        coronal_screenshot = viewer.screenshot(path=None)
+        axs[1, i].imshow(coronal_screenshot)
+        position_label = "Beginning" if i == 0 else "Middle" if i == 1 else "End"
+        axs[1, i].set_title(f"Coronal (X-Z) - {position_label}")
+        axs[1, i].axis('off')
+        viewer.layers.remove(coronal_layer)  # Remove the layer after screenshot
+    
+    # Sagittal Cuts (Y-Z plane, viewing from side, changing X)
+    for i, x_pos in enumerate(x_positions):
+        sagittal_data = volume[:, :, x_pos]
+        sagittal_layer = viewer.add_image(
+            sagittal_data,
+            name=f'sagittal_slice_{i}',
+            colormap='inferno',
+            visible=True
+        )
+        QApplication.processEvents()
+        time.sleep(0.5)
+        sagittal_screenshot = viewer.screenshot(path=None)
+        axs[2, i].imshow(sagittal_screenshot)
+        position_label = "Beginning" if i == 0 else "Middle" if i == 1 else "End"
+        axs[2, i].set_title(f"Sagittal (Y-Z) - {position_label}")
+        axs[2, i].axis('off')
+        viewer.layers.remove(sagittal_layer)  # Remove the layer after screenshot
     
     # Restore the main volume visibility
     main_volume_layer.visible = True
-
-    # Add the isometric view
-    axs[1, 1].imshow(isometric_screenshot)
-    axs[1, 1].set_title("Isometric 3D View")
-    axs[1, 1].axis('off')
+    
+    # Add the isometric view to the last column of each row
+    for i in range(3):
+        axs[i, 3].imshow(isometric_screenshot)
+        axs[i, 3].set_title("Isometric 3D View")
+        axs[i, 3].axis('off')
 
     plt.tight_layout(rect=[0, 0.03, 1, 0.95]) # Adjust layout to prevent title overlap
     plt.savefig(image_output_dir / f"{cur_volume_name}_multi_panel.png", dpi=300)
