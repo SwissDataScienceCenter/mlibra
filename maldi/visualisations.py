@@ -66,17 +66,33 @@ for cur_file in tqdm(files, desc="Processing volumes"):
                           # Lower value = more transparent
     )
 
-    # --- 3. Prepare for Screenshots (2D Cuts and 3D Isometric View) ---
-
-    # Set initial 3D display for the isometric view first
+    # --- 3. Prepare for Screenshots of 3D Isometric Views from different angles ---
     viewer.dims.ndisplay = 3
     viewer.camera.zoom = 0.7 # Adjust zoom as needed
-    # Set camera for an isometric-like view (azimuth, elevation, roll)
-    # These angles provide a good starting point for an isometric perspective.
-    viewer.camera.angles = (30+180, 45+180, 0+180) # (elevation, azimuth, roll)
+    
+    # Get 3D isometric views from different angles to match each cut direction
+    isometric_views = []
+    
+    # Axial view - looking from top (X-Y plane)
+    viewer.camera.angles = (0, 0, 0)  # Top-down view for axial (elevation, azimuth, roll)
     QApplication.processEvents()
     time.sleep(0.5)
-    isometric_screenshot = viewer.screenshot(path=None) # Take screenshot as numpy array
+    axial_isometric = viewer.screenshot(path=None)
+    isometric_views.append(axial_isometric)
+    
+    # Coronal view - looking from front (X-Z plane)
+    viewer.camera.angles = (90, 0, 0)  # Front view for coronal
+    QApplication.processEvents()
+    time.sleep(0.5)
+    coronal_isometric = viewer.screenshot(path=None)
+    isometric_views.append(coronal_isometric)
+    
+    # Sagittal view - looking from side (Y-Z plane)
+    viewer.camera.angles = (90, 90, 0)  # Side view for sagittal
+    QApplication.processEvents()
+    time.sleep(0.5)
+    sagittal_isometric = viewer.screenshot(path=None)
+    isometric_views.append(sagittal_isometric)
 
     # --- 4. Combine Screenshots into a Multi-Panel Matplotlib Figure ---
     # Create a larger figure with 3 rows (one for each plane) and 7 columns (6 slices + isometric)
@@ -173,10 +189,11 @@ for cur_file in tqdm(files, desc="Processing volumes"):
     # Restore the main volume visibility
     main_volume_layer.visible = True
     
-    # Add the isometric view to the last column of each row
+    # Add the matching isometric view to the last column of each row
     for i in range(3):
-        axs[i, 6].imshow(isometric_screenshot)
-        axs[i, 6].set_title("Isometric 3D View")
+        axs[i, 6].imshow(isometric_views[i])
+        view_names = ["Axial Orientation", "Coronal Orientation", "Sagittal Orientation"]
+        axs[i, 6].set_title(f"3D View - {view_names[i]}")
         axs[i, 6].axis('off')
 
     plt.tight_layout(rect=[0, 0.03, 1, 0.95]) # Adjust layout to prevent title overlap
