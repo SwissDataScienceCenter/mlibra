@@ -186,8 +186,8 @@ for cur_file in tqdm(files, desc="Processing volumes"):
         # Get the sagittal slice and flip it horizontally
         sagittal_data = volume[:, :, x_pos]
         # Flip the sagittal data along the horizontal axis (left-right flip)
-        sagittal_data = np.fliplr(sagittal_data)
-        
+        #sagittal_data = np.fliplr(sagittal_data)
+
         sagittal_layer = viewer.add_image(
             sagittal_data,
             name=f'sagittal_slice_{i}',
