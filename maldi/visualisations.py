@@ -92,41 +92,35 @@ for cur_file in tqdm(files, desc="Processing volumes"):
     # --- 4. Combine Screenshots into a Multi-Panel Matplotlib Figure ---
     fig, axs = plt.subplots(nrows=2, ncols=2, figsize=(12, 10))
     fig.suptitle(f"Mice Brain Visualization: {cur_volume_name}", fontsize=16)
-    # Axial Cut (along Z-axis, so set Z slice)
-    axial_slice_index = volume.shape[2] // 2 # Middle slice
-    viewer.dims.set_current_step(1, axial_slice_index) # Set Z-axis slice
-   # viewer.window.qt_viewer.update_console()
+    
+    # Axial Cut (X-Y plane, changing Z)
+    axial_slice_index = volume.shape[0] // 2  # Middle slice along Z axis
+    viewer.dims.set_point(0, axial_slice_index)  # Set Z axis slice
     QApplication.processEvents()
     time.sleep(0.9)
     axial_screenshot = viewer.screenshot(path=None)
     axs[0, 0].imshow(axial_screenshot)
-    axs[0, 0].set_title("Axial Cut (Z-slice)")
+    axs[0, 0].set_title("Axial Cut (X-Y plane)")
     axs[0, 0].axis('off')
-    # Coronal Cut (along Y-axis, so set Y slice)
-    coronal_slice_index = volume.shape[1] // 2 # Middle slice
-    viewer.dims.set_current_step(0, coronal_slice_index) # Set Y-axis slice
-   # viewer.window.qt_viewer.update_console()
+    
+    # Coronal Cut (X-Z plane, changing Y)
+    coronal_slice_index = volume.shape[1] // 2  # Middle slice along Y axis
+    viewer.dims.set_point(1, coronal_slice_index)  # Set Y axis slice
     QApplication.processEvents()
     time.sleep(0.9)
-
     coronal_screenshot = viewer.screenshot(path=None)
-
-
     axs[0, 1].imshow(coronal_screenshot)
-    axs[0, 1].set_title("Coronal Cut (Y-slice)")
+    axs[0, 1].set_title("Coronal Cut (X-Z plane)")
     axs[0, 1].axis('off')
 
-    # Sagittal Cut (along X-axis, so set X slice)
-    sagittal_slice_index = volume.shape[0] // 2 # Middle slice
-    viewer.dims.set_current_step(2, sagittal_slice_index) # Set X-axis slice
-   # viewer.window.qt_viewer.update_console()
+    # Sagittal Cut (Y-Z plane, changing X)
+    sagittal_slice_index = volume.shape[2] // 2  # Middle slice along X axis
+    viewer.dims.set_point(2, sagittal_slice_index)  # Set X axis slice
     QApplication.processEvents()
     time.sleep(0.9)
     sagittal_screenshot = viewer.screenshot(path=None)
-
-
     axs[1, 0].imshow(sagittal_screenshot)
-    axs[1, 0].set_title("Sagittal Cut (X-slice)")
+    axs[1, 0].set_title("Sagittal Cut (Y-Z plane)")
     axs[1, 0].axis('off')
 
     axs[1, 1].imshow(isometric_screenshot)
