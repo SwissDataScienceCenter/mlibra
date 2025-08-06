@@ -73,19 +73,19 @@ for cur_file in tqdm(files, desc="Processing volumes"):
     # Get 3D isometric views from different angles to match each cut direction
     isometric_views = []
     
-    # Axial view - looking from top (X-Y plane)
-    viewer.camera.angles = (0, 0, 0)  # Top-down view for axial (elevation, azimuth, roll)
-    QApplication.processEvents()
-    time.sleep(0.5)
-    axial_isometric = viewer.screenshot(path=None)
-    isometric_views.append(axial_isometric)
-    
     # Coronal view - looking from front (X-Z plane)
-    viewer.camera.angles = (90, 0, 0)  # Front view for coronal
+    viewer.camera.angles = (90, 0, 0)  # Front view for coronal (elevation, azimuth, roll)
     QApplication.processEvents()
     time.sleep(0.5)
     coronal_isometric = viewer.screenshot(path=None)
     isometric_views.append(coronal_isometric)
+    
+    # Axial view - looking from top (X-Y plane)
+    viewer.camera.angles = (0, 0, 0)  # Top-down view for axial
+    QApplication.processEvents()
+    time.sleep(0.5)
+    axial_isometric = viewer.screenshot(path=None)
+    isometric_views.append(axial_isometric)
     
     # Sagittal view - looking from side (Y-Z plane)
     viewer.camera.angles = (90, 90, 0)  # Side view for sagittal
@@ -134,24 +134,6 @@ for cur_file in tqdm(files, desc="Processing volumes"):
     # Position labels for titles
     position_labels = ["10%", "25%", "40%", "55%", "70%", "85%"]
     
-    # Axial Cuts (X-Y plane, viewing from top, changing Z)
-    for i, z_pos in enumerate(z_positions):
-        axial_data = volume[z_pos, :, :]
-        axial_layer = viewer.add_image(
-            axial_data,
-            name=f'axial_slice_{i}',
-            colormap='inferno',
-            visible=True
-        )
-        main_volume_layer.visible = False  # Hide the volume temporarily
-        QApplication.processEvents()
-        time.sleep(0.5)
-        axial_screenshot = viewer.screenshot(path=None)
-        axs[0, i].imshow(axial_screenshot)
-        axs[0, i].set_title(f"Axial (X-Y) - {position_labels[i]}")
-        axs[0, i].axis('off')
-        viewer.layers.remove(axial_layer)  # Remove the layer after screenshot
-    
     # Coronal Cuts (X-Z plane, viewing from front, changing Y)
     for i, y_pos in enumerate(y_positions):
         coronal_data = volume[:, y_pos, :]
@@ -161,13 +143,31 @@ for cur_file in tqdm(files, desc="Processing volumes"):
             colormap='inferno',
             visible=True
         )
+        main_volume_layer.visible = False  # Hide the volume temporarily
         QApplication.processEvents()
         time.sleep(0.5)
         coronal_screenshot = viewer.screenshot(path=None)
-        axs[1, i].imshow(coronal_screenshot)
-        axs[1, i].set_title(f"Coronal (X-Z) - {position_labels[i]}")
-        axs[1, i].axis('off')
+        axs[0, i].imshow(coronal_screenshot)
+        axs[0, i].set_title(f"Coronal (X-Z) - {position_labels[i]}")
+        axs[0, i].axis('off')
         viewer.layers.remove(coronal_layer)  # Remove the layer after screenshot
+    
+    # Axial Cuts (X-Y plane, viewing from top, changing Z)
+    for i, z_pos in enumerate(z_positions):
+        axial_data = volume[z_pos, :, :]
+        axial_layer = viewer.add_image(
+            axial_data,
+            name=f'axial_slice_{i}',
+            colormap='inferno',
+            visible=True
+        )
+        QApplication.processEvents()
+        time.sleep(0.5)
+        axial_screenshot = viewer.screenshot(path=None)
+        axs[1, i].imshow(axial_screenshot)
+        axs[1, i].set_title(f"Axial (X-Y) - {position_labels[i]}")
+        axs[1, i].axis('off')
+        viewer.layers.remove(axial_layer)  # Remove the layer after screenshot
     
     # Sagittal Cuts (Y-Z plane, viewing from side, changing X)
     for i, x_pos in enumerate(x_positions):
@@ -192,7 +192,7 @@ for cur_file in tqdm(files, desc="Processing volumes"):
     # Add the matching isometric view to the last column of each row
     for i in range(3):
         axs[i, 6].imshow(isometric_views[i])
-        view_names = ["Axial Orientation", "Coronal Orientation", "Sagittal Orientation"]
+        view_names = ["Coronal Orientation", "Axial Orientation", "Sagittal Orientation"]
         axs[i, 6].set_title(f"3D View - {view_names[i]}")
         axs[i, 6].axis('off')
 
