@@ -104,13 +104,6 @@ class MaldiExperiment:
                                                   columns=["Section"],
                                                   filters=self.train_filter)
 
-    def load_train_coordinates(self):
-        logging.info("Loading training coordinates")
-        coordinates_names = ["xccf", "yccf", "zccf"]
-        self.coordinates_train = pd.read_parquet(self.config.maldi_file,
-                                                    columns=coordinates_names,
-                                                    filters=self.train_filter).values
-
     def load_train_pixel_coordinates(self):
         logging.info("Loading training pixel coordinates")
         coordinates_names = ["x", "y"]
@@ -258,273 +251,6 @@ class MaldiExperiment:
             self.current_epoch = len(list(self.config.checkpoint_path.glob("*.pth")))
             logging.info(f"loaded checkpoint {last_checkpoint}")
 
-    def train_fit(self):
-            optimizer = torch.optim.Adam(self.lgp_model.parameters(), lr=self.config.learning_rate)
-            # let's use ADAMW instead of ADAM
-            optimizer = torch.optim.AdamW(self.lgp_model.parameters(), lr=self.config.learning_rate, weight_decay=1e-3)
-            logging.info("ready to roll")
-
-
-            dataloader_train= torch.utils.data.DataLoader(
-                self.dataset_train,
-                batch_size=self.config.batch_size,
-                shuffle=True,
-                num_workers=0
-            )
-
-            logging.info("Model file not found, starting training from scratch")
-            if self.current_epoch < self.config.epochs:
-                logging.info(f"Starting training from epoch {self.current_epoch}")
-                self.lgp_model.train_model(self.config.exp_path,
-                                      dataloader_train,
-                                      optimizer,
-                                      epochs=self.config.epochs,
-                                      current_epoch=self.current_epoch,
-                                      print_every=1000)
-
-    def run(self):
-        """Run the experiment."""
-        # Fit he model using the training data,
-        logging.info("Starting training loop")
-        if(self.config.exp_path / "model.pth").exists():
-            logging.info("Loading model from file")
-            self.lgp_model.load_state_dict(torch.load(self.config.exp_path / "model.pth", map_location=self.config.device))
-            logging.info("Model loaded successfully")
-        else:
-            self.load_train_data()
-            self.current_epoch = 0
-            self.load_checkpoint()
-            wandb.init(name=self.config.exp_name,
-                       project="l3di_maldi",
-                       config=self.config.to_dict()
-                       )
-            self.train_fit()
-            wandb.finish()
-            logging.info("Training completed, saving model")
-
-        # Predict in the train set
-        logging.info("Predicting in the train set")
-        train_path = self.config.exp_path / "train"
-        train_path.mkdir(parents=True, exist_ok=True)
-        train_predictions_file = train_path / "predictions.pth"
-        if not train_predictions_file.exists():
-            self.load_coord_train_data()
-            logging.info("Predicting in the train set")
-            self.lgp_model.eval()
-            train_pred_dataloader = torch.utils.data.DataLoader(torch.utils.data.TensorDataset(self.coordinates_train),
-                                                                batch_size=self.config.batch_size,
-                                                                shuffle=False,
-                                                                num_workers=0)
-            logging.info("Predicting in the train set using the model")
-            predictions_list = []
-            posterior_list = []
-            for batch in tqdm(train_pred_dataloader):
-                coordinates_batch = batch[0].to(self.config.device)
-                predictions, gp_posterior = self.lgp_model.predict(coordinates_batch)
-                predictions_list.append(predictions.detach().cpu())
-                posterior_list.append(gp_posterior.mean.detach().cpu())
-            train_predictions = torch.cat(predictions_list, dim=0)
-            posterior = torch.cat(posterior_list, dim=0)
-            torch.save(train_predictions, train_predictions_file)
-            torch.save(posterior, train_predictions_file.with_name("posterior.pth"))
-        else:
-            logging.info("Train predictions already exist, loading from file")
-            train_predictions = torch.load(train_predictions_file)
-
-        test_path = self.config.exp_path / "test"
-        test_path.mkdir(parents=True, exist_ok=True)
-        test_predictions_file = test_path / "predictions.pth"
-        if not test_predictions_file.exists():
-            self.load_coord_test_data()
-            logging.info("Predicting in the test set")
-            self.lgp_model.eval()
-            self.load_coord_test_data()
-            test_pred_dataloader = torch.utils.data.DataLoader(torch.utils.data.TensorDataset(self.coordinates_test),
-                                                               batch_size=self.config.batch_size,
-                                                               shuffle=False,
-                                                               num_workers=0)
-            predictions_list = []
-            posterior_list = []
-            for batch in tqdm(test_pred_dataloader):
-                coordinates_batch = batch[0].to(self.config.device)
-                predictions,posterior = self.lgp_model.predict(coordinates_batch)
-                predictions_list.append(predictions.detach().cpu())
-                posterior_list.append(posterior.mean.detach().cpu())
-            test_predictions = torch.cat(predictions_list, dim=0)
-            posterior = torch.cat(posterior_list, dim=0)
-            torch.save(test_predictions, test_predictions_file)
-            torch.save(posterior, test_predictions_file.with_name("posterior.pth"))
-        else:
-            logging.info("Test predictions already exist, loading from file")
-            test_predictions = torch.load(test_predictions_file)
-        train_prediction_file = train_path / "train_predictions.parquet"
-        test_prediction_file = test_path / "test_predictions.parquet"
-        if True: #not (train_prediction_file.exists() and test_prediction_file.exists()):
-            if self.train_data is None:
-                self.load_train_data()
-            if self.test_data is None:
-                self.load_test_data()
-            # evaluate predictions:
-            logging.info("Evaluating predictions")
-            train_predictions = train_predictions * self.col_stds + self.col_means
-            test_predictions = test_predictions * self.col_stds + self.col_means
-            if self.config.log_transform:
-                train_predictions = np.exp(train_predictions) - 1e-10
-                test_predictions = np.exp(test_predictions) - 1e-10
-            train_data = self.train_data * self.col_stds + self.col_means
-            test_data = self.test_data * self.col_stds + self.col_means
-            if self.config.log_transform:
-                train_data = np.exp(train_data) - 1e-10
-                test_data = np.exp(test_data) - 1e-10
-            # train and test are 2D tensors, save as pandas dataframes, with columns "true" and "predicted"
-            train_df = pd.DataFrame(data=train_data.numpy(),
-                                    columns=self.config.selected_lipids_names)
-            predictions_df = pd.DataFrame(data=train_predictions.numpy(),
-                                        columns=self.config.selected_lipids_names)
-            test_df = pd.DataFrame(data=test_data.numpy(),
-                                      columns=self.config.selected_lipids_names)
-            test_predictions_df = pd.DataFrame(data=test_predictions.numpy(),
-                                               columns=self.config.selected_lipids_names)
-            train_df = pd.concat([train_df, predictions_df.add_suffix("_predicted")], axis=1)
-            test_df = pd.concat([test_df, test_predictions_df.add_suffix("_predicted")], axis=1)
-
-            train_df.to_parquet(train_prediction_file)
-            test_df.to_parquet(test_prediction_file )
-            self.train_data_original = train_data.numpy()
-            self.test_data_original = test_data.numpy()
-            self.predictions_train = train_predictions.numpy()
-            self.predictions_test = test_predictions.numpy()
-            np.save(train_path / "predictions.npy", train_predictions.numpy())
-            np.save(test_path / "predictions.npy", test_predictions.numpy())
-            np.save(train_path / "true_values.npy", train_data.numpy())
-            np.save(test_path / "true_values.npy", test_data.numpy())
-            train_plot_path = train_path / "plots"
-            test_plot_path = test_path / "plots"
-            logging.info(f"Train plot path: {train_plot_path}")
-            train_plot_path.mkdir(parents=True, exist_ok=True)
-            test_plot_path.mkdir(parents=True, exist_ok=True)
-            logging.info("Plotting predictions")
-            import matplotlib.pyplot as plt
-            plot_all = False
-
-            if plot_all:
-                for lipid in tqdm(self.config.selected_lipids_names):
-                    logging.info(f"Plotting {lipid}")
-                    correlation = train_df[lipid].corr(train_df[f"{lipid}_predicted"])
-                    mse = ((train_df[lipid] - train_df[f"{lipid}_predicted"]) ** 2).mean()
-                    mae = (train_df[lipid] - train_df[f"{lipid}_predicted"]).abs().mean()
-                    mre = (train_df[lipid] - train_df[f"{lipid}_predicted"]).abs() / train_df[lipid].abs()
-                    r2 = 1 - (mse / train_df[lipid].var())
-                    log_accuracy_ratio = (np.sum(np.log(train_df[f"{lipid}_predicted"].values / train_df[lipid].values)))**2
-
-                    train_metrics = {
-                        "mse": mse.item(),
-                        "mae": mae.item(),
-                        "mre": mre.mean().item(),
-                        "r2": r2.item(),
-                        "correlation": correlation.item(),
-                        "log_accuracy_ratio": log_accuracy_ratio
-                    }
-
-                    fig, ax = plt.subplots(figsize=(10, 10))
-                    ax.plot([train_df[lipid].min(), train_df[lipid].max()],[train_df[lipid].min(), train_df[lipid].max()], "k--", lw=2)
-                    density_scatter(ax, train_df[lipid], train_df[f"{lipid}_predicted"],
-                                    x_min=train_df[lipid].min(), x_max=train_df[lipid].max(),
-                                    y_min=train_df[f"{lipid}_predicted"].min(), y_max=train_df[f"{lipid}_predicted"].max(),
-                                    s=0.1, alpha=0.1)
-                    ax.set_title(f"Train set: {lipid} vs {lipid}_predicted\nCorrelation: {correlation:.2f}")
-                    ax.set_xlabel(f"{lipid} (true)")
-                    ax.set_ylabel(f"{lipid} (predicted)")
-                    plt.savefig(train_plot_path / f"{lipid}_train.png")
-                    plt.close(fig)
-
-                    y_true = train_df[lipid].values
-                    y_pred = train_df[f"{lipid}_predicted"].values
-                    y_true = np.log10(y_true + 1e-10)
-                    y_pred = np.log10(y_pred + 1e-10)
-                    correlation = np.corrcoef(y_true, y_pred)[0, 1]
-                    fig, ax = plt.subplots(figsize=(10, 10))
-                    ax.plot([np.min(y_true), np.max(y_true)],
-                            [np.min(y_true), np.max(y_true)], "k--", lw=2)
-                    density_scatter(ax, y_true, y_pred,
-                                    x_min=np.min(y_true), x_max=np.max(y_true),
-                                    y_min=np.min(y_pred), y_max=np.max(y_pred),
-                                    s=0.1, alpha=0.1)
-                    ax.set_title(f"Train set: log({lipid}) vs log({lipid}_predicted)\nCorrelation: {correlation:.2f}")
-                    ax.set_xlabel(f"log10({lipid}) (true)")
-                    ax.set_ylabel(f"log10({lipid}) (predicted)")
-                    plt.savefig(train_plot_path / f"log_{lipid}_train.png")
-                    plt.close(fig)
-
-                # Now for the test set
-                correlation = test_df[lipid].corr(test_df[f"{lipid}_predicted"])
-                mse = ((test_df[lipid] - test_df[f"{lipid}_predicted"]) ** 2).mean()
-                mae = (test_df[lipid] - test_df[f"{lipid}_predicted"]).abs().mean()
-                mre = (test_df[lipid] - test_df[f"{lipid}_predicted"]).abs() / test_df[lipid].abs()
-                r2 = 1 - (mse / test_df[lipid].var())
-                log_accuracy_ratio= (np.sum(np.log(test_df[f"{lipid}_predicted"].values / test_df[lipid].values)))**2
-                test_metrics = {
-                    "mse": mse.item(),
-                    "mae": mae.item(),
-                    "mre": mre.mean().item(),
-                    "r2": r2.item(),
-                    "correlation": correlation.item(),
-                    "log_accuracy_ratio": log_accuracy_ratio
-                }
-
-                if plot_all:
-                    fig, ax = plt.subplots(figsize=(10, 10))
-                    ax.plot([test_df[lipid].min(), test_df[lipid].max()],[test_df[lipid].min(), test_df[lipid].max()], "k--", lw=2)
-                    density_scatter(ax, test_df[lipid], test_df[f"{lipid}_predicted"],
-                                    x_min=test_df[lipid].min(), x_max=test_df[lipid].max(),
-                                    y_min=test_df[f"{lipid}_predicted"].min(), y_max=test_df[f"{lipid}_predicted"].max(),
-                                    s=0.1, alpha=0.1)
-                    ax.set_title(f"Test set: {lipid} vs {lipid}_predicted\nCorrelation: {test_df[lipid].corr(test_df[f'{lipid}_predicted']):.2f}")
-                    ax.set_xlabel(f"{lipid} (true)")
-                    ax.set_ylabel(f"{lipid} (predicted)")
-                    plt.savefig(test_plot_path / f"{lipid}_test.png")
-                    plt.close(fig)
-
-                    y_true = test_df[lipid].values
-                    y_pred = test_df[f"{lipid}_predicted"].values
-                    y_true = np.log10(y_true + 1e-10)
-                    y_pred = np.log10(y_pred + 1e-10)
-                    correlation = np.corrcoef(y_true, y_pred)[0, 1]
-                    fig, ax = plt.subplots(figsize=(10, 10))
-                    ax.plot([np.min(y_true), np.max(y_true)],
-                            [np.min(y_true), np.max(y_true)], "k--", lw=2)
-                    density_scatter(ax, y_true, y_pred,
-                                    x_min=np.min(y_true), x_max=np.max(y_true),
-                                    y_min=np.min(y_pred), y_max=np.max(y_pred),
-                                    s=0.1, alpha=0.1)
-                    ax.set_title(f"Test set: log({lipid}) vs log({lipid}_predicted)\nCorrelation: {correlation:.2f}")
-                    ax.set_xlabel(f"log10({lipid}) (true)")
-                    ax.set_ylabel(f"log10({lipid}) (predicted)")
-                    plt.savefig(test_plot_path / f"log_{lipid}_test.png")
-                    plt.close(fig)
-
-                # Save metrics to a file
-                metrics_df = pd.DataFrame({
-                    "lipid": [lipid],
-                    "train_mse": [train_metrics["mse"]],
-                    "train_mae": [train_metrics["mae"]],
-                    "train_mre": [train_metrics["mre"]],
-                    "train_r2": [train_metrics["r2"]],
-                    "train_correlation": [train_metrics["correlation"]],
-                    "train_log_accuracy_ratio": [train_metrics["log_accuracy_ratio"]],
-                    "test_mse": [test_metrics["mse"]],
-                    "test_mae": [test_metrics["mae"]],
-                    "test_mre": [test_metrics["mre"]],
-                    "test_r2": [test_metrics["r2"]],
-                    "test_correlation": [test_metrics["correlation"]],
-                    "test_log_accuracy_ratio": [test_metrics["log_accuracy_ratio"]]
-                })
-                metrics_file = self.config.exp_path / "metrics.csv"
-                if metrics_file.exists():
-                    existing_metrics = pd.read_csv(metrics_file)
-                    metrics_df = pd.concat([existing_metrics, metrics_df], ignore_index=True)
-                metrics_df.to_csv(metrics_file )
-
     @property
     def true_values_train(self):
         """
@@ -635,6 +361,24 @@ class MaldiExperiment:
         if self.pixel_coordinates_test is None:
             self.load_test_pixel_coordinates()
         return self.pixle_coordinates_test
+
+    @property
+    def train_mean(self):
+        """
+        Returns the mean of the training data.
+        """
+        if self.col_means is None:
+            self.col_means = torch.load(self.config.exp_path / "lipid_means.pth")
+        return self.col_means.to(self.config.device)
+
+    @property
+    def train_std(self):
+        """
+        Returns the standard deviation of the training data.
+        """
+        if self.col_stds is None:
+            self.col_stds = torch.load(self.config.exp_path / "lipid_stds.pth")
+        return self.col_stds.to(self.config.device)
 
     def plot_lipid_distribution(self, sections: list[int], selected_lipid_indexes: list[int], dataset="train", add_scatter=False):
         """
@@ -804,24 +548,6 @@ class MaldiExperiment:
         plt.tight_layout(rect=[0, 0, 1, 0.9])
         plt.suptitle('Lipid Distribution: True vs. Predicted Values', y=0.99, fontsize=16) # Overall title
 
-    @property
-    def train_mean(self):
-        """
-        Returns the mean of the training data.
-        """
-        if self.col_means is None:
-            self.col_means = torch.load(self.config.exp_path / "lipid_means.pth")
-        return self.col_means.to(self.config.device)
-
-    @property
-    def train_std(self):
-        """
-        Returns the standard deviation of the training data.
-        """
-        if self.col_stds is None:
-            self.col_stds = torch.load(self.config.exp_path / "lipid_stds.pth")
-        return self.col_stds.to(self.config.device)
-
     def plot_lipid_scatter(self, lipid, dataset="train"):
         """
         Generates a scatter plot for the lipid distribution in the specified sections and lipids.
@@ -951,3 +677,138 @@ class MaldiExperiment:
             template_volume = 255*( template_volume - np.nanmin(template_volume)) / (np.nanmax(template_volume)- np.nanmin(template_volume))
             np.save(self.config.exp_path / f"{lipid_name}_volume255.npy", template_volume)
             return template_volume
+
+    def train_fit(self):
+            optimizer = torch.optim.Adam(self.lgp_model.parameters(), lr=self.config.learning_rate)
+            # let's use ADAMW instead of ADAM
+            optimizer = torch.optim.AdamW(self.lgp_model.parameters(), lr=self.config.learning_rate, weight_decay=1e-3)
+            logging.info("ready to roll")
+
+
+            dataloader_train= torch.utils.data.DataLoader(
+                self.dataset_train,
+                batch_size=self.config.batch_size,
+                shuffle=True,
+                num_workers=0
+            )
+
+            logging.info("Model file not found, starting training from scratch")
+            if self.current_epoch < self.config.epochs:
+                logging.info(f"Starting training from epoch {self.current_epoch}")
+                self.lgp_model.train_model(self.config.exp_path,
+                                      dataloader_train,
+                                      optimizer,
+                                      epochs=self.config.epochs,
+                                      current_epoch=self.current_epoch,
+                                      print_every=1000)
+
+    def predict_original_scale(self):
+        if self.train_data is None:
+            self.load_train_data()
+        if self.test_data is None:
+            self.load_test_data()
+        # evaluate predictions:
+        logging.info("Evaluating predictions")
+        train_predictions = train_predictions * self.col_stds + self.col_means
+        test_predictions = test_predictions * self.col_stds + self.col_means
+        if self.config.log_transform:
+            train_predictions = np.exp(train_predictions) - 1e-10
+            test_predictions = np.exp(test_predictions) - 1e-10
+        train_data = self.train_data * self.col_stds + self.col_means
+        test_data = self.test_data * self.col_stds + self.col_means
+        if self.config.log_transform:
+            train_data = np.exp(train_data) - 1e-10
+            test_data = np.exp(test_data) - 1e-10
+        # save data and predictions in the original scale
+        self.train_data_original = train_data.numpy()
+        self.test_data_original = test_data.numpy()
+        self.predictions_train = train_predictions.numpy()
+        self.predictions_test = test_predictions.numpy()
+        np.save(train_path / "predictions.npy", train_predictions.numpy())
+        np.save(test_path / "predictions.npy", test_predictions.numpy())
+        np.save(train_path / "true_values.npy", train_data.numpy())
+        np.save(test_path / "true_values.npy", test_data.numpy())
+
+    def run(self):
+        """Run the experiment."""
+        # Fit he model using the training data,
+        logging.info("Starting training loop VAE")
+        if(self.config.exp_path / "model.pth").exists():
+            logging.info("Loading model from file")
+            self.lgp_model.load_state_dict(torch.load(self.config.exp_path / "model.pth", map_location=self.config.device))
+            logging.info("Model loaded successfully")
+        else:
+            self.load_train_data()
+            self.current_epoch = 0
+            self.load_checkpoint()
+            wandb.init(name=self.config.exp_name,
+                       project="l3di_maldi",
+                       config=self.config.to_dict()
+                       )
+            self.train_fit()
+            wandb.finish()
+            logging.info("Training completed, saving model")
+
+        # Predict in the train set
+        logging.info("Predicting in the train set")
+        train_path = self.config.exp_path / "train"
+        train_path.mkdir(parents=True, exist_ok=True)
+        train_predictions_file = train_path / "predictions.pth"
+        if not train_predictions_file.exists():
+            self.load_coord_train_data()
+            logging.info("Predicting in the train set")
+            self.lgp_model.eval()
+            train_pred_dataloader = torch.utils.data.DataLoader(torch.utils.data.TensorDataset(self.coordinates_train),
+                                                                batch_size=self.config.batch_size,
+                                                                shuffle=False,
+                                                                num_workers=0)
+            logging.info("Predicting in the train set using the model")
+            predictions_list = []
+            posterior_list = []
+            for batch in tqdm(train_pred_dataloader):
+                coordinates_batch = batch[0].to(self.config.device)
+                predictions, gp_posterior = self.lgp_model.predict(coordinates_batch)
+                predictions_list.append(predictions.detach().cpu())
+                posterior_list.append(gp_posterior.mean.detach().cpu())
+            train_predictions = torch.cat(predictions_list, dim=0)
+            posterior = torch.cat(posterior_list, dim=0)
+            torch.save(train_predictions, train_predictions_file)
+            torch.save(posterior, train_predictions_file.with_name("posterior.pth"))
+        else:
+            logging.info("Train predictions already exist, loading from file")
+            train_predictions = torch.load(train_predictions_file)
+
+        # Predict in the test set in the training data scale (not original scale)
+        logging.info("Predicting in the test set")
+        test_path = self.config.exp_path / "test"
+        test_path.mkdir(parents=True, exist_ok=True)
+        test_predictions_file = test_path / "predictions.pth"
+        if not test_predictions_file.exists():
+            self.load_coord_test_data()
+            logging.info("Predicting in the test set")
+            self.lgp_model.eval()
+            self.load_coord_test_data()
+            test_pred_dataloader = torch.utils.data.DataLoader(torch.utils.data.TensorDataset(self.coordinates_test),
+                                                               batch_size=self.config.batch_size,
+                                                               shuffle=False,
+                                                               num_workers=0)
+            predictions_list = []
+            posterior_list = []
+            for batch in tqdm(test_pred_dataloader):
+                coordinates_batch = batch[0].to(self.config.device)
+                predictions,posterior = self.lgp_model.predict(coordinates_batch)
+                predictions_list.append(predictions.detach().cpu())
+                posterior_list.append(posterior.mean.detach().cpu())
+            test_predictions = torch.cat(predictions_list, dim=0)
+            posterior = torch.cat(posterior_list, dim=0)
+            torch.save(test_predictions, test_predictions_file)
+            torch.save(posterior, test_predictions_file.with_name("posterior.pth"))
+        else:
+            logging.info("Test predictions already exist, loading from file")
+            test_predictions = torch.load(test_predictions_file)
+        train_predictions_file = train_path / "predictions.npy"
+        test_predictions_file = test_path / "predictions.npy"
+        if not train_predictions_file.exists() or not test_predictions_file.exists():
+            logging.info("Train and test predictions do not exist, saving predictions to file")
+            predict_original_scale = self.config.predict_original_scale()
+
