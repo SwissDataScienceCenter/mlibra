@@ -418,11 +418,11 @@ class SimpleDDPM1D(nn.Module):
             if t == 0:
                 # In the final step we remove the conditioning bias
                 # This is specific to this implementation and differs from standard DDPM
-                x -= cond
+                #x -= cond
                 # TODO what happens if we don't do that?
                 # x += cond
-            # Add results to checkpoints
-            x = (x + 1) / 2 # Rescale to [0, 1]
+                # Add results to checkpoints
+                x = (x + 1) / 2 # Rescale to [0, 1]
             if idx + 1 in checkpoints:
                 sample_dict[str(idx + 1)] = x
 
