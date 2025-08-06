@@ -79,32 +79,44 @@ for cur_file in tqdm(files, desc="Processing volumes"):
     isometric_screenshot = viewer.screenshot(path=None) # Take screenshot as numpy array
 
     # --- 4. Combine Screenshots into a Multi-Panel Matplotlib Figure ---
-    # Create a larger figure with 3 rows (one for each plane) and 4 columns (3 slices + isometric)
-    fig, axs = plt.subplots(nrows=3, ncols=4, figsize=(16, 12))
+    # Create a larger figure with 3 rows (one for each plane) and 7 columns (6 slices + isometric)
+    fig, axs = plt.subplots(nrows=3, ncols=7, figsize=(24, 12))
     fig.suptitle(f"Mice Brain Visualization: {cur_volume_name}", fontsize=16)
     
     # Switch to 2D display for slice views
     viewer.dims.ndisplay = 2
     
-    # Calculate slice positions for beginning (20%), middle (50%), and end (80%)
-    # For each axis
+    # Calculate slice positions for 6 evenly distributed positions
+    # For each axis, at approximately 10%, 25%, 40%, 55%, 70%, and 85%
     z_positions = [
-        int(volume.shape[0] * 0.2),  # Beginning (20%)
-        volume.shape[0] // 2,         # Middle (50%)
-        int(volume.shape[0] * 0.8)    # End (80%)
+        int(volume.shape[0] * 0.10),  # 10%
+        int(volume.shape[0] * 0.25),  # 25%
+        int(volume.shape[0] * 0.40),  # 40%
+        int(volume.shape[0] * 0.55),  # 55%
+        int(volume.shape[0] * 0.70),  # 70%
+        int(volume.shape[0] * 0.85),  # 85%
     ]
     
     y_positions = [
-        int(volume.shape[1] * 0.2),  # Beginning (20%)
-        volume.shape[1] // 2,         # Middle (50%)
-        int(volume.shape[1] * 0.8)    # End (80%)
+        int(volume.shape[1] * 0.10),  # 10%
+        int(volume.shape[1] * 0.25),  # 25%
+        int(volume.shape[1] * 0.40),  # 40%
+        int(volume.shape[1] * 0.55),  # 55%
+        int(volume.shape[1] * 0.70),  # 70%
+        int(volume.shape[1] * 0.85),  # 85%
     ]
     
     x_positions = [
-        int(volume.shape[2] * 0.2),  # Beginning (20%)
-        volume.shape[2] // 2,         # Middle (50%)
-        int(volume.shape[2] * 0.8)    # End (80%)
+        int(volume.shape[2] * 0.10),  # 10%
+        int(volume.shape[2] * 0.25),  # 25%
+        int(volume.shape[2] * 0.40),  # 40%
+        int(volume.shape[2] * 0.55),  # 55%
+        int(volume.shape[2] * 0.70),  # 70%
+        int(volume.shape[2] * 0.85),  # 85%
     ]
+    
+    # Position labels for titles
+    position_labels = ["10%", "25%", "40%", "55%", "70%", "85%"]
     
     # Axial Cuts (X-Y plane, viewing from top, changing Z)
     for i, z_pos in enumerate(z_positions):
@@ -120,8 +132,7 @@ for cur_file in tqdm(files, desc="Processing volumes"):
         time.sleep(0.5)
         axial_screenshot = viewer.screenshot(path=None)
         axs[0, i].imshow(axial_screenshot)
-        position_label = "Beginning" if i == 0 else "Middle" if i == 1 else "End"
-        axs[0, i].set_title(f"Axial (X-Y) - {position_label}")
+        axs[0, i].set_title(f"Axial (X-Y) - {position_labels[i]}")
         axs[0, i].axis('off')
         viewer.layers.remove(axial_layer)  # Remove the layer after screenshot
     
@@ -138,8 +149,7 @@ for cur_file in tqdm(files, desc="Processing volumes"):
         time.sleep(0.5)
         coronal_screenshot = viewer.screenshot(path=None)
         axs[1, i].imshow(coronal_screenshot)
-        position_label = "Beginning" if i == 0 else "Middle" if i == 1 else "End"
-        axs[1, i].set_title(f"Coronal (X-Z) - {position_label}")
+        axs[1, i].set_title(f"Coronal (X-Z) - {position_labels[i]}")
         axs[1, i].axis('off')
         viewer.layers.remove(coronal_layer)  # Remove the layer after screenshot
     
@@ -156,8 +166,7 @@ for cur_file in tqdm(files, desc="Processing volumes"):
         time.sleep(0.5)
         sagittal_screenshot = viewer.screenshot(path=None)
         axs[2, i].imshow(sagittal_screenshot)
-        position_label = "Beginning" if i == 0 else "Middle" if i == 1 else "End"
-        axs[2, i].set_title(f"Sagittal (Y-Z) - {position_label}")
+        axs[2, i].set_title(f"Sagittal (Y-Z) - {position_labels[i]}")
         axs[2, i].axis('off')
         viewer.layers.remove(sagittal_layer)  # Remove the layer after screenshot
     
@@ -166,9 +175,9 @@ for cur_file in tqdm(files, desc="Processing volumes"):
     
     # Add the isometric view to the last column of each row
     for i in range(3):
-        axs[i, 3].imshow(isometric_screenshot)
-        axs[i, 3].set_title("Isometric 3D View")
-        axs[i, 3].axis('off')
+        axs[i, 6].imshow(isometric_screenshot)
+        axs[i, 6].set_title("Isometric 3D View")
+        axs[i, 6].axis('off')
 
     plt.tight_layout(rect=[0, 0.03, 1, 0.95]) # Adjust layout to prevent title overlap
     plt.savefig(image_output_dir / f"{cur_volume_name}_multi_panel.png", dpi=300)
