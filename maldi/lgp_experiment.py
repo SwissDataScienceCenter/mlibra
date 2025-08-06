@@ -1,8 +1,4 @@
-"""
-example.py
-Example script to run the MALDI experiment using l3di.
-"""
-
+"""This script sets up and runs a MALDI experiment using the l3di library."""
 from l3di.lgp import LGP, IndependentMultitaskGPModel
 from experiment import MaldiExperiment
 from config import MaldiConfig
@@ -69,8 +65,7 @@ def setup_experiment(args):
         activation='relu',
         device=config.device
     )
-    experiment = MaldiExperiment(config,lgp_model,coord_mean, coord_std)
-    return experiment
+    return MaldiExperiment(config,lgp_model,coord_mean, coord_std)
 
 
 if __name__ == "__main__":
@@ -78,5 +73,5 @@ if __name__ == "__main__":
     logging.info("Starting MALDI experiment")
     args = parse_args()
     logging.info(f"Parsed arguments: {args}")
-    setup_experiment(args)
+    experiment = setup_experiment(args)
     experiment.run()
