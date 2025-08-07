@@ -83,7 +83,8 @@ for cur_file in tqdm(files, desc="Processing volumes"):
 
     # --- 4. Combine Screenshots into a Multi-Panel Matplotlib Figure ---
     # Create a larger figure with 4 rows (3 for cuts, 1 for rotation) and 10 columns
-    fig, axs = plt.subplots(nrows=4, ncols=10, figsize=(30, 13))
+    # Reduced the overall height to compress the figure vertically
+    fig, axs = plt.subplots(nrows=4, ncols=10, figsize=(30, 11))
     fig.suptitle(f"Mice Brain Visualization: {cur_volume_name}", fontsize=16)
     
     # Switch to 2D display for slice views
@@ -147,7 +148,7 @@ for cur_file in tqdm(files, desc="Processing volumes"):
         time.sleep(0.5)
         coronal_screenshot = viewer.screenshot(path=None)
         axs[0, i].imshow(coronal_screenshot)
-        axs[0, i].set_title(f"Axial (X-Y) - {position_labels[i]}", fontsize=8)
+        axs[0, i].set_title(f"Axial (X-Y) - {position_labels[i]}", fontsize=6)  # Smaller font
         axs[0, i].axis('off')
         viewer.layers.remove(coronal_layer)  # Remove the layer after screenshot
     
@@ -164,7 +165,7 @@ for cur_file in tqdm(files, desc="Processing volumes"):
         time.sleep(0.5)
         axial_screenshot = viewer.screenshot(path=None)
         axs[1, i].imshow(axial_screenshot)
-        axs[1, i].set_title(f"Coronal (X-Z) - {position_labels[i]}", fontsize=8)
+        axs[1, i].set_title(f"Coronal (X-Z) - {position_labels[i]}", fontsize=6)  # Smaller font
         axs[1, i].axis('off')
         viewer.layers.remove(axial_layer)  # Remove the layer after screenshot
     
@@ -183,7 +184,7 @@ for cur_file in tqdm(files, desc="Processing volumes"):
         time.sleep(0.5)
         sagittal_screenshot = viewer.screenshot(path=None)
         axs[2, i].imshow(sagittal_screenshot)
-        axs[2, i].set_title(f"Sagittal (Y-Z) - {position_labels[i]}", fontsize=8)
+        axs[2, i].set_title(f"Sagittal (Y-Z) - {position_labels[i]}", fontsize=6)  # Smaller font
         axs[2, i].axis('off')
         viewer.layers.remove(sagittal_layer)  # Remove the layer after screenshot
     
@@ -194,14 +195,17 @@ for cur_file in tqdm(files, desc="Processing volumes"):
     for i in range(10):
         axs[3, i].imshow(rotation_frames[i])
         angle = i * 36
-        axs[3, i].set_title(f"3D Rotation - {angle}°", fontsize=8)
+        axs[3, i].set_title(f"3D Rotation - {angle}°", fontsize=6)  # Smaller font
         axs[3, i].axis('off')
 
-    # Reduce whitespace between plots - setting both horizontal and vertical spacing
-    plt.subplots_adjust(wspace=0.01, hspace=0.05)
-    # Adjust the tight_layout with smaller padding
-    plt.tight_layout(rect=[0, 0.03, 1, 0.95], pad=0.05)
-    plt.savefig(image_output_dir / f"{cur_volume_name}_multi_panel.png", dpi=300)
+    # Even more aggressive whitespace reduction
+    plt.subplots_adjust(wspace=0.01, hspace=0.01)  # Minimal spacing
+    
+    # We skip tight_layout since it can sometimes add padding
+    # Instead, directly set the figure margins
+    plt.subplots_adjust(left=0.01, right=0.99, top=0.95, bottom=0.01)
+    
+    plt.savefig(image_output_dir / f"{cur_volume_name}_multi_panel.png", dpi=300, bbox_inches='tight')
     plt.close(fig) # Close the matplotlib figure to free memory
     viewer.close() # Close the napari viewer after taking all screenshots for this volume
 def void():
