@@ -197,9 +197,10 @@ for cur_file in tqdm(files, desc="Processing volumes"):
         axs[3, i].set_title(f"3D Rotation - {angle}°", fontsize=8)
         axs[3, i].axis('off')
 
-    # Reduce whitespace between plots
-    plt.subplots_adjust(wspace=0.02, hspace=0.1)
-    plt.tight_layout(rect=[0, 0.03, 1, 0.95], pad=0.1) # Adjust layout to prevent title overlap
+    # Reduce whitespace between plots - setting both horizontal and vertical spacing
+    plt.subplots_adjust(wspace=0.01, hspace=0.05)
+    # Adjust the tight_layout with smaller padding
+    plt.tight_layout(rect=[0, 0.03, 1, 0.95], pad=0.05)
     plt.savefig(image_output_dir / f"{cur_volume_name}_multi_panel.png", dpi=300)
     plt.close(fig) # Close the matplotlib figure to free memory
     viewer.close() # Close the napari viewer after taking all screenshots for this volume
