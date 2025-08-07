@@ -68,7 +68,7 @@ for cur_file in tqdm(files, desc="Processing volumes"):
 
     # --- 3. Prepare for Screenshots of 3D View Rotation ---
     viewer.dims.ndisplay = 3
-    viewer.camera.zoom = 1.2  # Increased zoom for better visibility
+    viewer.camera.zoom = 1.8  # Further increased zoom for better visibility
     
     # Capture 10 frames of rotation for the last row
     rotation_frames = []
