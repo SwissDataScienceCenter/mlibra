@@ -10,6 +10,8 @@ from tqdm import tqdm
 from pathlib import Path
 import matplotlib.pyplot as plt
 import wandb
+from config import MaldiConfig
+from l3di.lgp import LGP
 
 def density_scatter(ax, x, y, x_min, x_max, y_min, y_max, bins=50, **kwargs):
     """
@@ -79,7 +81,7 @@ def scatter_comparison(true_values, predicted_values, lipid ):
     plt.show()
 
 class MaldiExperiment:
-    def __init__(self, config, lgp_model, coord_mean, coord_std):
+    def __init__(self, config:MaldiConfig, lgp_model:LGP, coord_mean:torch.Tensor, coord_std:torch.Tensor):
         self.config = config
         self.coord_mean = coord_mean
         self.coord_std = coord_std
@@ -528,13 +530,16 @@ class MaldiExperiment:
             if add_scatter:
                 # --- Scatter Plot for the current section and lipid ---
                 scatter_ax = axes[2, col_idx]
-                true_value = true_values_section[current_lipid].values
-                predicted_value = predictions_section[current_lipid].values
+                true_values_mask = true_values[current_lipid].values > 1e-5
+                predictions_mask = predictions[current_lipid].values > 1e-5
+                final_mask = true_values_mask & predictions_mask
+                true_value = true_values_section[current_lipid].values[final_mask]
+                predicted_value = predictions_section[current_lipid].values[final_mask]
                 true_min = np.nanmin(true_value)
                 true_max = np.nanmax(true_value)
                 predicted_min = np.nanmin(predicted_value)
                 predicted_max = np.nanmax(predicted_value)
-                correlation = true_values_section[current_lipid].corr(predictions_section[current_lipid])
+                correlation = true_values_section[current_lipid].corr(predictions_section[current_lipid],method='spearman')
                 scatter_ax.plot([true_min, true_max],[true_min, true_max], "k--", lw=2)
                 density_scatter(scatter_ax, true_value, predicted_value,
                                 x_min=true_min, x_max=true_max,
@@ -543,6 +548,8 @@ class MaldiExperiment:
                 scatter_ax.set_title(f"True: {current_lipid} vs {current_lipid} Predicted\nCorrelation: {correlation:.2f}")
                 scatter_ax.set_xlabel(f"{current_lipid} (true)")
                 scatter_ax.set_ylabel(f"{current_lipid} (predicted)")
+                scatter_ax.set_yscale('log')
+                scatter_ax.set_xscale('log')
         # Adjust layout to make space for the top colorbars and prevent overlap
         # Increased rect top margin to 0.9 for more overall space
         plt.tight_layout(rect=[0, 0, 1, 0.9])
@@ -582,6 +589,15 @@ class MaldiExperiment:
         plt.show()
 
     def whole_brain_reconstruction(self):
+        """
+        Reconstructs the whole brain volume for all lipids using the trained model.
+
+        This function loads the model from the specified path, prepares the template volume,
+        and iterates through the non-zero indices of the template volume to predict lipid concentrations
+        using the trained model. The predictions are saved in batches to avoid memory issues.
+        The template volume is downloaded if it does not exist, and the predictions are saved in a specified directory.
+        The function assumes that the model has been trained and saved in the specified path.
+        """
         if(self.config.exp_path / "model.pth").exists():
             logging.info("Loading model from file")
             self.lgp_model.load_state_dict(torch.load(self.config.exp_path / "model.pth", map_location=self.config.device))
@@ -640,7 +656,12 @@ class MaldiExperiment:
 
     def load_whole_brain_reconstruction(self, lipid):
         """
-        Loads the whole brain reconstruction for a specific lipid.
+        Loads and saves the whole brain reconstruction for a specific lipid.
+
+        This does not need gpu to be run, as all the data was already batched and saved.
+
+        Args:
+            lipid (int): The index of the lipid to reconstruct.
         """
         volume_path = self.config.exp_path / "volume"
         template_file = volume_path / "template_volume.npy"
@@ -679,7 +700,6 @@ class MaldiExperiment:
             return template_volume
 
     def train_fit(self):
-            optimizer = torch.optim.Adam(self.lgp_model.parameters(), lr=self.config.learning_rate)
             # let's use ADAMW instead of ADAM
             optimizer = torch.optim.AdamW(self.lgp_model.parameters(), lr=self.config.learning_rate, weight_decay=1e-3)
             logging.info("ready to roll")
@@ -812,3 +832,84 @@ class MaldiExperiment:
             logging.info("Train and test predictions do not exist, saving predictions to file")
             predict_original_scale = self.config.predict_original_scale()
 
+        if self.config.use_diffusion:
+            logging.info("Using diffusion model for the experiment")
+            from l3di.simple_ddpm1d import SimpleDDPM1D, SimpleUNet1D
+            unet = SimpleUNet1D(in_channels=1, model_channels=64, out_channels=1, z_dim=self.config.latent_dim)
+            ddpm = SimpleDDPM1D(unet,T=1000,var_type="fixedsmall")
+            vae_model_weights = torch.load(self.config.exp_path / "model.pth")
+            self.lgp_model.load_state_dict(vae_model_weights)
+            vae=self.lgp_model
+            voxel_model_file = self.config.exp_path / "voxel_diffusion.pt"
+            self.load_train_data()
+                # Diffusion dataset, normalized between 0,1
+            train_data_min = self.train_data.min(dim=0).values
+            train_data_max = self.train_data.max(dim=0).values
+
+            if not voxel_model_file.exists():
+                diffusion_dataset = torch.utils.data.TensorDataset((self.train_data - train_data_min) / (train_data_max - train_data_min), self.coordinates_train)
+                data_loader_train = torch.utils.data.DataLoader(
+                    diffusion_dataset,
+                    batch_size=100,
+                    shuffle=True,
+                    num_workers=0)
+                ddpm.train(data_loader_train, epochs=10,lr=2e-4,vae=vae)
+                ddpm.save_model(self.config.exp_path / "voxel_diffusion.pt")
+            else:
+                logging.info("Loading voxel diffusion model from file")
+                ddpm.load_model(voxel_model_file, self.config.device)
+                logging.info("Voxel diffusion model loaded successfully")
+
+            # predict training set
+            logging.info("Predicting in the training set using the diffusion model")
+            ccf_dataset = torch.utils.data.TensorDataset(torch.Tensor(self.ccf_train) )
+            ccf_dataloader = torch.utils.data.DataLoader(ccf_dataset, batch_size=self.config.batch_size, shuffle=False, num_workers=0)
+            predictions_list = []
+            with torch.no_grad():
+                train_predictions_diffusion_file = train_path / "predictions_diffusion.npy"
+                if not train_predictions_diffusion_file.exists():
+                    pass
+
+                    # for batch in tqdm(ccf_dataloader):
+                    #     coordinates_batch = batch[0].to(self.config.device)
+                    #     cond, gp_posterior = self.lgp_model.predict(coordinates_batch)
+                    #     x_t = torch.randn(cond.shape[0], 1, cond.shape[1], device=self.config.device)
+                    #     cond = cond.unsqueeze(1).to(self.config.device)
+                    #     sample_dict = ddpm.sample(x_t, cond, gp_posterior.mean,n_steps=500,clip_denoised=True)
+                    #     cond = cond.squeeze().detach().cpu()
+                    #     predictions = sample_dict["500"].squeeze().detach().cpu()
+                    #     predictions = predictions *(train_data_max - train_data_min) + train_data_min
+                    #     predictions = cond - predictions
+                    #     predictions = predictions * self.train_std.cpu() + self.train_mean.cpu()
+                    #     predictions = predictions.numpy()
+                    #     if self.config.log_transform:
+                    #         predictions = np.exp(predictions) - 1e-10
+                    #     predictions_list.append(predictions)
+                    # # predictions_list is a list of numpy arrays, we need to concatenate them
+                    # train_predictions_diffusion = np.concatenate(predictions_list, axis=0)
+                    # np.save(train_predictions_diffusion_file, train_predictions_diffusion)
+
+                # predict test set
+                self.load_coord_test_data()
+
+                ccf_dataset = torch.utils.data.TensorDataset(self.coordinates_test)
+                ccf_dataloader = torch.utils.data.DataLoader(ccf_dataset, batch_size=self.config.batch_size, shuffle=False, num_workers=0)
+                predictions_list = []
+                for batch in tqdm(ccf_dataloader):
+                    coordinates_batch = batch[0].to(self.config.device)
+                    cond, gp_posterior = self.lgp_model.predict(coordinates_batch)
+                    x_t = torch.randn(cond.shape[0], 1, cond.shape[1], device=self.config.device)
+                    cond = cond.unsqueeze(1).to(self.config.device)
+                    sample_dict = ddpm.sample(x_t, cond, gp_posterior.mean,n_steps=500,clip_denoised=True)
+                    cond = cond.squeeze().detach().cpu()
+                    predictions = sample_dict["500"].squeeze().detach().cpu()
+                    predictions = predictions *(train_data_max - train_data_min) + train_data_min
+                    predictions = predictions * self.train_std.cpu() + self.train_mean.cpu()
+                    predictions = predictions + (cond * self.train_std.cpu() + self.train_mean.cpu())
+                    predictions = predictions.numpy()
+                    if self.config.log_transform:
+                        predictions = np.exp(predictions) - 1e-10
+                    predictions_list.append(predictions)
+                test_predictions_diffusion = np.concatenate(predictions_list, axis=0)
+                test_predictions_diffusion_file = test_path / "predictions_diffusion.npy"
+                np.save(test_predictions_diffusion_file, test_predictions_diffusion)

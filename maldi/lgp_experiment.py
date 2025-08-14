@@ -27,6 +27,8 @@ def parse_args():
     parser.add_argument("--n-pixels", dest="n_pixels", type=int, default=10, help="Number of pixels to consider in the experiment.")
     parser.add_argument("--learning-rate", dest="learning_rate", type=float, default=0.001, help="Learning rate for the optimizer.")
     parser.add_argument("--batch-size", dest="batch_size", type=int, default=2000, help="Batch size for training")
+    parser.add_argument("--load-args", dest="load_args", action='store_true', help="Load arguments from a file instead of command line.")
+    parser.add_argument("--use-diffusion", dest="use_diffusion", action='store_true', help="Use diffusion model in the experiment.")
 
     # Add other arguments as needed
     return vars(parser.parse_args())

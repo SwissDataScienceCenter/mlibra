@@ -236,6 +236,7 @@ class SimpleDDPM1D(nn.Module):
         Modified from standard DDPM to include conditioning:
         x_0 = sqrt_recip_alphas_cumprod * x_t - sqrt_recip_alphas_cumprod * cond - sqrt_recipm1_alphas_cumprod * eps
         """
+
         assert x_t.shape == eps.shape
         assert cond is not None, "Conditioning must be provided"
         assert cond.shape == x_t.shape
@@ -275,7 +276,7 @@ class SimpleDDPM1D(nn.Module):
                 low_res=torch.zeros_like(cond),
                 z=torch.zeros_like(z_vae),
             )
-            
+        eps_score = eps_score[:,:, :cond.shape[-1]]  # Ensure eps_score matches cond shape
         # Generate the reconstruction from x_t
         x_recons = self._predict_xstart_from_eps(x_t, t_, eps_score, cond=cond)
         
@@ -416,11 +417,6 @@ class SimpleDDPM1D(nn.Module):
             x = post_mean + nonzero_mask * torch.exp(0.5 * post_log_variance) * z
             
             if t == 0:
-                # In the final step we remove the conditioning bias
-                # This is specific to this implementation and differs from standard DDPM
-                #x -= cond
-                # TODO what happens if we don't do that?
-                # x += cond
                 # Add results to checkpoints
                 x = (x + 1) / 2 # Rescale to [0, 1]
             if idx + 1 in checkpoints:

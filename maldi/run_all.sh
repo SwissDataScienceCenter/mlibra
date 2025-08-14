@@ -31,4 +31,5 @@ python /myhome/mlibra/maldi/lgp_experiment.py \
     --kernel "$KERNEL" \
     --mode "$MODE" \
     --available-lipids-file $AVAILABLE_LIPIDS_FILE \
-    --log-transform
+    --log-transform \
+    --use-diffusion

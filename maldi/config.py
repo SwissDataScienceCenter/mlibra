@@ -38,6 +38,7 @@ class MaldiConfig:
     selected_lipids_names: List[str]
     available_lipids: List[str]
     selected_channels: List[int]
+    use_diffusion: bool = False
 
     @staticmethod
     def from_args(args):
@@ -49,6 +50,8 @@ class MaldiConfig:
         Args:
             args (dict): Dictionary containing the experiment arguments, read from command line or config file.
         """
+        load_args = args.get("load_args", False)
+        use_diffusion = args.get("use_diffusion", False)
         logging.info("Creating experiment configuration from arguments")
         mode = args["mode"]
         # Extracting path arguments
@@ -77,6 +80,8 @@ class MaldiConfig:
         batch_size = args['batch_size']
         learning_rate = args.get("learning_rate", 0.001)
         exp_name = exp_name + str(args["n_pixels"])
+        use_diffusion = args.get("use_diffusion", False)
+
 
         # Create paths
         if log_transform:
@@ -89,8 +94,24 @@ class MaldiConfig:
         # Create the path for the checkpoints
         checkpoint_path = exp_path / "checkpoints"
         checkpoint_path.mkdir(parents=True, exist_ok=True)
+        # Create the path for train and test results
+        train_results_path = exp_path / "train"
+        test_results_path = exp_path / "test"
+        train_results_path.mkdir(parents=True, exist_ok=True)
+        test_results_path.mkdir(parents=True, exist_ok=True)
+        volume_path = exp_path / "volume"
+        volume_path.mkdir(parents=True, exist_ok=True)
+        if use_diffusion:
+            logging.info("Using diffusion model for the experiment")
+            exp_path.mkdir(parents=True, exist_ok=True)
+            checkpoint_path = exp_path / "diffusion_checkpoints"
+            checkpoint_path.mkdir(parents=True, exist_ok=True)
+            volume_path = exp_path / "volume_diffusion"
+            volume_path.mkdir(parents=True, exist_ok=True)
+
+
         # Load arguments if previously saved
-        if exp_path.exists() and (exp_path / "args.npy").exists():
+        if exp_path.exists() and (exp_path / "args.npy").exists() and load_args:
             logging.info(f"Experiment {exp_path} already exists")
             logging.info("ATTENTION: loading original experiment arguments and using them")
             args = np.load(exp_path / "args.npy", allow_pickle=True).item()
@@ -123,7 +144,8 @@ class MaldiConfig:
                            section_filter=section_filter,
                            test_filter=test_filter,
                            selected_channels=selected_channels,
-                           available_lipids=available_lipids)
+                           available_lipids=available_lipids,
+                           use_diffusion=use_diffusion)
 
     def to_dict(self):
         """
@@ -154,7 +176,8 @@ class MaldiConfig:
             "learning_rate": self.learning_rate,
             "section_filter": self.section_filter,
             "test_filter": self.test_filter,
-            "selected_lipids_names": self.selected_lipids_names
+            "selected_lipids_names": self.selected_lipids_names,
+            "use_diffusion": self.use_diffusion,
         }
 
 def extract_filters(left_out_slice):
