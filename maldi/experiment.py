@@ -530,8 +530,8 @@ class MaldiExperiment:
             if add_scatter:
                 # --- Scatter Plot for the current section and lipid ---
                 scatter_ax = axes[2, col_idx]
-                true_values_mask = true_values[current_lipid].values > 1e-5
-                predictions_mask = predictions[current_lipid].values > 1e-5
+                true_values_mask = true_values_section[current_lipid].values > 1e-5
+                predictions_mask = predictions_section[current_lipid].values > 1e-5
                 final_mask = true_values_mask & predictions_mask
                 true_value = true_values_section[current_lipid].values[final_mask]
                 predicted_value = predictions_section[current_lipid].values[final_mask]
