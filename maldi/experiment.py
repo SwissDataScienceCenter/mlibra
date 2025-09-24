@@ -742,10 +742,10 @@ class MaldiExperiment:
         # save data and predictions in the original scale
         self.train_data_original = train_data.numpy()
         self.test_data_original = test_data.numpy()
-        np.save(train_path / "predictions.npy", train_predictions.numpy())
-        np.save(test_path / "predictions.npy", test_predictions.numpy())
-        np.save(train_path / "true_values.npy", train_data.numpy())
-        np.save(test_path / "true_values.npy", test_data.numpy())
+        np.save(self.config.exp_path / "train" / "predictions.npy", train_predictions.numpy())
+        np.save(self.config.exp_path / "test" / "predictions.npy", test_predictions.numpy())
+        np.save(self.config.exp_path / "train" / "true_values.npy", train_data.numpy())
+        np.save(/self.config.exp_path / "test" / "true_values.npy", test_data.numpy())
 
     def run(self):
         """Run the experiment."""
