@@ -745,7 +745,7 @@ class MaldiExperiment:
         np.save(self.config.exp_path / "train" / "predictions.npy", train_predictions.numpy())
         np.save(self.config.exp_path / "test" / "predictions.npy", test_predictions.numpy())
         np.save(self.config.exp_path / "train" / "true_values.npy", train_data.numpy())
-        np.save(/self.config.exp_path / "test" / "true_values.npy", test_data.numpy())
+        np.save(self.config.exp_path / "test" / "true_values.npy", test_data.numpy())
 
     def run(self):
         """Run the experiment."""
