@@ -722,7 +722,7 @@ class MaldiExperiment:
                                       current_epoch=self.current_epoch,
                                       print_every=1000)
 
-    def predict_original_scale(self):
+    def predict_original_scale(self, train_predictions, test_predictions):
         if self.train_data is None:
             self.load_train_data()
         if self.test_data is None:
@@ -829,8 +829,8 @@ class MaldiExperiment:
         train_predictions_file = train_path / "predictions.npy"
         test_predictions_file = test_path / "predictions.npy"
         if not train_predictions_file.exists() or not test_predictions_file.exists():
-            logging.info("Train and test predictions do not exist, saving predictions to file")
-            predict_original_scale = self.config.predict_original_scale()
+            logging.info("Train and test numpy predictions do not exist, saving predictions to file")
+            predict_original_scale = self.predict_original_scale(train_predictions, test_predictions)
 
         if self.config.use_diffusion:
             logging.info("Using diffusion model for the experiment")
