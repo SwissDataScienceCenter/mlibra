@@ -1,3 +1,5 @@
+import logging
+
 import gpytorch
 import numpy as np
 import torch
@@ -61,13 +63,17 @@ class IndependentMultitaskGPModel(ApproximateGP):
     We define a GP prior for the latent space. The GP prior is defined by a mean and a covariance function.
     """
 
-    def __init__(self, inducing_points, num_tasks, kernel_type="rbf", nu=1.5, minimal_length_scale=1,input_dim=174):
+    def __init__(self, inducing_points, num_tasks, kernel_type="rbf", nu=1.5, minimal_length_scale=1, input_dim=174,
+                 ard_num_dims=None, learn_inducing_locations=False):
         """
         Construct the GPModel class.
 
         Args:
             inducing_points (torch.Tensor): Inducing points for the GP
             num_tasks (int): Number of tasks
+            ard_num_dims (int | None): None/1 → isotropic (single shared
+                lengthscale); 3 → per-axis ARD (one lengthscale per spatial
+                dimension). Applies to the RBF and Matern kernels.
         """
         # Let's use a different set of inducing points for each task
         # for each num_task we have a set of inducing points
@@ -81,7 +87,8 @@ class IndependentMultitaskGPModel(ApproximateGP):
 
         variational_strategy = IndependentMultitaskVariationalStrategy(
             VariationalStrategy(
-                self, inducing_points, variational_distribution, learn_inducing_locations=True
+                self, inducing_points, variational_distribution,
+                learn_inducing_locations=learn_inducing_locations,
             ),
             num_tasks=num_tasks,
         )
@@ -90,24 +97,38 @@ class IndependentMultitaskGPModel(ApproximateGP):
 
         # The mean and covariance modules should be marked as batch
         # so we learn a different set of hyperparameters
-        self.mean_module = LinearMean(input_size=3, batch_shape=torch.Size([num_tasks]))
+        self.mean_module = LinearMean(input_size=input_dim, batch_shape=torch.Size([num_tasks]))
         self.kernel_type = kernel_type
         self.nu = nu
         if kernel_type == "rbf":
-            print("Using RBF kernel")
+            print(f"Using RBF kernel (ard_num_dims={ard_num_dims})")
             self.covar_module = ScaleKernel(
                 RBFKernel(batch_shape=torch.Size([num_tasks]),
-                          ard_num_dims=3),
+                          ard_num_dims=ard_num_dims),
                 batch_shape=torch.Size([num_tasks])
             )
         else:
             if kernel_type == "matern":
-                print(f"Using Matern kernel with nu={self.nu}")
+                print(f"Using Matern kernel with nu={self.nu} (ard_num_dims={ard_num_dims})")
+                # None/1 → isotropic; 3 → per-axis ARD (passed in by caller).
+                # The constraint must match the lengthscale shape: a per-axis vector
+                # only for ARD, a scalar otherwise. A vector constraint broadcasts the
+                # lengthscale to size-3, and the non-ARD MaternCovariance path then
+                # rejects it ("cannot handle multiple lengthscales").
+                if ard_num_dims and ard_num_dims > 1:
+                    # Per-axis floor: constrain only the first dimension (matches the
+                    # original size-3 [minimal_length_scale, 0, 0]); generalized to any
+                    # ard_num_dims so non-3D inputs (e.g. the eigenmap embedding) work.
+                    floor_vec = [minimal_length_scale] + [0.0] * (ard_num_dims - 1)
+                    lengthscale_constraint = gpytorch.constraints.GreaterThan(
+                        torch.tensor(floor_vec, dtype=torch.float32))
+                else:
+                    lengthscale_constraint = gpytorch.constraints.GreaterThan(minimal_length_scale)
                 self.covar_module = ScaleKernel(
                     MaternKernel(batch_shape=torch.Size([num_tasks]),
                                  nu=self.nu,
-                                 ard_num_dims=3,
-                                 lengthscale_constraint=gpytorch.constraints.GreaterThan(torch.tensor([minimal_length_scale,0,0], dtype=torch.float32))),
+                                 ard_num_dims=ard_num_dims,
+                                 lengthscale_constraint=lengthscale_constraint),
                     batch_shape=torch.Size([num_tasks])
                 )
             elif kernel_type == "symmetric":
@@ -133,13 +154,39 @@ class IndependentMultitaskGPModel(ApproximateGP):
         return MultivariateNormal(mean_x, covar_x)
 
 
+def resolve_beta(beta, dataloader) -> float:
+    """Turn the --beta setting into the multiplier the training loop applies.
+
+    A float is used as given. 'elbo' asks for the KL weight that makes the
+    per-minibatch loss proportional to the ELBO over the whole dataset: the
+    loop sums the NLL over a minibatch of B but adds the FULL KL every step,
+    so the KL has to be scaled by B/N to keep the ratio the full-data
+    objective has. N differs per fold, hence resolving it here rather than
+    asking the caller for a number.
+    """
+    if isinstance(beta, str) and beta.strip().lower() == "elbo":
+        try:
+            n = len(dataloader.dataset)
+            b = dataloader.batch_size or 1
+        except (AttributeError, TypeError):
+            logging.warning("beta='elbo' but the dataloader size is unknown; using 1.0")
+            return 1.0
+        scaled = b / max(n, 1)
+        logging.info(f"beta='elbo' -> B/N = {b}/{n} = {scaled:.6g}")
+        return scaled
+    return float(beta)
+
+
 class LGP(nn.Module):
     """
     Latent Gaussian Process model with a conditional likelihood on the latent space.
     """
-    def __init__(self, p, d, n_neurons, dropout, activation,  device, gp_model):
+    def __init__(self, p, d, n_neurons, dropout, activation,  device, gp_model, use_rsample=True,
+                 beta=1.0):
         super(LGP, self).__init__()
         self.mode = "lgp"
+        self.use_rsample = use_rsample
+        self.beta = beta          # KL weight; float, or 'elbo' for B/N (see resolve_beta)
         self.p = p  # number of channels
         self.d = d  # latent dimension
 
@@ -160,7 +207,12 @@ class LGP(nn.Module):
         layers = []
         for i in range(len(n_neurons)):
             layers.append(nn.Linear(input_dim, n_neurons[i]))
-            layers.append(nn.ReLU() if activation == 'relu' else nn.Tanh())
+            if activation == 'relu':
+                layers.append(nn.ReLU())
+            elif activation == 'silu':
+                layers.append(nn.SiLU())
+            else:
+                layers.append(nn.Tanh())
             if dropout[i] > 0:
                 layers.append(nn.Dropout(dropout[i]))
             input_dim = n_neurons[i]
@@ -173,7 +225,10 @@ class LGP(nn.Module):
 
     def forward(self, coords):
         gp_posterior = self.gp_model(coords)
-        latent_forward = gp_posterior.mean
+        if self.training and self.use_rsample:
+            latent_forward = gp_posterior.rsample()
+        else:
+            latent_forward = gp_posterior.mean
         x_reconstructed = self.decode(latent_forward)
         return x_reconstructed, gp_posterior
 
@@ -212,6 +267,10 @@ class LGP(nn.Module):
         self.to(self.device)
         self.train()
 
+        beta = resolve_beta(getattr(self, "beta", 1.0), dataloader)
+        logging.info(f"training with KL weight beta={beta:.6g}")
+        wandb.log({"beta": beta})
+
         for epoch in range(current_epoch, epochs):
             mean_loss = 0
             reconstr_loss = 0
@@ -224,7 +283,7 @@ class LGP(nn.Module):
                 optimizer.zero_grad()
                 x_reconstructed, gp_posterior = self(coord)
 
-                loss, recon_loss, kl_div = self.loss_function(x, x_reconstructed, beta=1.0)
+                loss, recon_loss, kl_div = self.loss_function(x, x_reconstructed, beta=beta)
                 loss.backward()
                 optimizer.step()
                 mean_loss += loss.item()
