@@ -2,6 +2,7 @@
 # Non-GP baselines, with the same reconstruction + render + diagnostics parity as
 # run_manifold.sh. MODEL selects the baseline:
 #   mean | linear | xgboost | mlp | mlp_bottleneck | mlp_eigen | gcn | gcn_faiss
+#   | euclid
 #   mlp_bottleneck — MLP with a narrow middle (bottleneck) layer; a preset that
 #               maps to --model mlp with MLP_HIDDEN='256 5 256 256 128'
 #   mlp_eigen — MLP on [coords, points projected to the manifold eigenbasis]
@@ -9,6 +10,11 @@
 #   gcn       — Graph Conv Net over a per-batch KNN graph of the coords
 #   gcn_faiss — Graph Conv Net over the FAISS reference-node manifold graph
 #               (needs the graph pipeline; set EIGENVECTOR_DIR + graph knobs)
+#   euclid    — EUCLID's anatomical_interpolation, executed as-is from the
+#               EUCLID checkout (repo root: ./euclid). Nothing is trained, so
+#               BATCH_SIZE / N_EPOCHS / LEARNING_RATE are inert. Only knobs:
+#               EUCLID_REPO, EUCLID_W (their w, default 50), EUCLID_JOBS
+#               (their kernel is ~242 s/lipid; 25-way => ~30 min for 173).
 : "${BATCH_SIZE:=256}"
 # Reconstruction forward pass only; NOT the training minibatch (that's BATCH_SIZE,
 # which is also baked into EXP_NAME, so don't repurpose it to speed up inference).
@@ -45,6 +51,49 @@ fi
 # volumes to volume_sparse/ instead of the dense volume/ that napari + the
 # analysis scripts consume — so leave it 0 if you need the full 3D volumes.
 : "${RENDER_VOXELS_ONLY:=1}"
+
+# --- EUCLID knobs (MODEL=euclid); ignored otherwise -------------------------
+# EUCLID's own defaults; there is nothing else to tune (grid, radius, exp(-d)
+# weights, leaf gate and index map all come from their code + shipped volumes).
+: "${EUCLID_REPO:=/home/casap/mlibra_git/euclid}"
+: "${EUCLID_W:=50}"
+: "${EUCLID_JOBS:=25}"
+: "${EUCLID_ATLAS:=euclid}"
+# Intensity scale handed to their normalize_to_255. none = as-is (historical);
+# max = per-lipid divide by the TRAIN max so every lipid reaches 255 and W means
+# one thing; global = one constant making log(x) > 0. See --euclid-normalize.
+: "${EUCLID_NORM:=none}"
+# Dir holding EUCLID's two 100um .npy volumes, if they are staged outside the
+# code checkout (e.g. on S3). Empty = read them from $EUCLID_REPO.
+: "${EUCLID_DATA_DIR:=}"
+EUCLID_ARGS=""
+if [ "$MODEL" = "euclid" ]; then
+    # The EUCLID checkout is not part of this repo (it is a separate clone, and
+    # untracked here), so on a fresh cluster node it has to be fetched. Its two
+    # 100um .npy volumes are committed in that repo, so the clone is all we need.
+    if [ ! -f "$EUCLID_REPO/src/euclid_msi/postprocessing.py" ]; then
+        echo "run_baseline: EUCLID checkout missing at $EUCLID_REPO -- cloning"
+        git clone --depth 1 https://github.com/lamanno-epfl/EUCLID.git "$EUCLID_REPO" || {
+            echo "run_baseline: FAILED to clone EUCLID into $EUCLID_REPO" >&2; exit 1; }
+    fi
+    EUCLID_ARGS="--euclid-repo $EUCLID_REPO --euclid-w $EUCLID_W --euclid-jobs $EUCLID_JOBS --euclid-normalize $EUCLID_NORM"
+    # EUCLID_ATLAS picks which volumes drive their pipeline:
+    #   euclid -> their 100um reference/annotation (the Allen 672-label leaf
+    #             volume). Read from EUCLID_DATA_DIR if set, else the checkout.
+    #   own    -> this repo's REFERENCE_FILE + ANNOTATION_FILE, subsampled [::4].
+    case "$EUCLID_ATLAS" in
+        own)
+            EUCLID_ARGS="$EUCLID_ARGS --euclid-reference $REFERENCE_FILE --euclid-annotation $ANNOTATION_FILE"
+            ;;
+        euclid)
+            if [ -n "$EUCLID_DATA_DIR" ]; then
+                EUCLID_ARGS="$EUCLID_ARGS --euclid-reference $EUCLID_DATA_DIR/reference_image100um.npy --euclid-annotation $EUCLID_DATA_DIR/annotation_image100um.npy"
+            fi
+            ;;
+        *) echo "run_baseline: EUCLID_ATLAS must be 'euclid' or 'own' (got '$EUCLID_ATLAS')" >&2; exit 1 ;;
+    esac
+    [ -n "$EUCLID_VERIFY_REDUCTION" ] && EUCLID_ARGS="$EUCLID_ARGS --euclid-verify-reduction"
+fi
 
 # --- GCN knobs (MODEL=gcn / gcn_faiss) --------------------------------------
 : "${GCN_HIDDEN:=512 512 256}"
@@ -105,6 +154,23 @@ if { [ "$MODEL" = "mlp_eigen" ] || [ "$MODEL" = "gcn_faiss" ]; } \
     fi
     if [ "$(awk "BEGIN{print (${PRUNE_CROSS_REGION:-0}>0)?1:0}")" = "1" ]; then
         EXP_NAME="$EXP_NAME-prune$PRUNE_CROSS_REGION"
+    fi
+fi
+
+# Every input that changes an EUCLID result goes in the name, so no two configs
+# can share a dir: the w threshold, the intensity prescale, and BOTH volumes
+# (the annotation is the
+# structure gate, the reference is the `reference < 4` background mask). The
+# atlas is named by its file stems rather than a mode word, so swapping
+# level_15annot for ccf_depth7annot also lands somewhere new. EUCLID_JOBS and
+# RENDER_VOXELS_ONLY are deliberately absent: neither changes a prediction.
+if [ "$MODEL" = "euclid" ]; then
+    [ "$EUCLID_W" != "50" ] && EXP_NAME="$EXP_NAME-w$EUCLID_W"
+    [ "$EUCLID_NORM" != "none" ] && EXP_NAME="$EXP_NAME-norm$EUCLID_NORM"
+    if [ "$EUCLID_ATLAS" = "own" ]; then
+        EXP_NAME="$EXP_NAME-$(basename "$ANNOTATION_FILE" .npy)-$(basename "$REFERENCE_FILE" .npy)"
+    else
+        EXP_NAME="$EXP_NAME-euclidatlas"
     fi
 fi
 
@@ -204,6 +270,7 @@ python $SRC_PATH/baselines/experiment_baselines.py \
     --gcn-faiss-iters $GCN_FAISS_ITERS \
     --gcn-faiss-node-batch $GCN_FAISS_NODE_BATCH \
     $EIGEN_ARGS \
+    $EUCLID_ARGS \
     $SCRATCH_ARGS \
     $RENDER_ARGS \
     --reconstruct whole_brain \
